@@ -23,3 +23,10 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Your app logic dependencies
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+prober_core = { path = "../../crates/prober_core" }
