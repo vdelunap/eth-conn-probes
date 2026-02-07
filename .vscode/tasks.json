@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "rust: test",
+      "type": "shell",
+      "command": "cargo test",
+      "problemMatcher": []
+    },
+    {
+      "label": "cli: run",
+      "type": "shell",
+      "command": "cargo run -p prober_cli -- run --config config/default.toml --pretty",
+      "problemMatcher": []
+    },
+    {
+      "label": "app: dev",
+      "type": "shell",
+      "command": "pnpm tauri dev",
+      "options": { "cwd": "${workspaceFolder}/app" },
+      "problemMatcher": []
+    },
+    {
+      "label": "server: up",
+      "type": "shell",
+      "command": "docker compose up -d --build",
+      "options": { "cwd": "${workspaceFolder}/server" },
+      "problemMatcher": []
+    }
+  ]
+}
