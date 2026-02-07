@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Rust CLI (lldb)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["run", "-p", "prober_cli", "--", "run", "--config", "config/default.toml", "--pretty"],
+        "filter": { "name": "prober_cli", "kind": "bin" }
+      },
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
