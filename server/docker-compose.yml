@@ -1,0 +1,9 @@
+services:
+  eth-prober-server:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./geoip:/geoip:ro
+    restart: unless-stopped
