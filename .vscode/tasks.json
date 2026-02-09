@@ -16,7 +16,7 @@
     {
       "label": "app: dev",
       "type": "shell",
-      "command": "pnpm tauri dev",
+      "command": "npm run tauri dev",
       "options": { "cwd": "${workspaceFolder}/app" },
       "problemMatcher": []
     },
