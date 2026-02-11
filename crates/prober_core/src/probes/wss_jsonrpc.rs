@@ -11,20 +11,18 @@ pub struct WssJsonRpcProbe {
 impl super::ProbeFn for WssJsonRpcProbe {
     async fn run(&self, timeout_ms: u64) -> model::AttemptResult {
         let started = model::now_ms();
-        let url = match url::Url::parse(&self.url) {
-            Ok(u) => u,
-            Err(e) => {
-                return model::AttemptResult {
-                    ok: false,
-                    rtt_ms: None,
-                    error: Some(format!("bad_url: {e}")),
-                    meta: serde_json::json!({}),
-                };
-            }
-        };
+        let url_str = self.url.clone();
+        if let Err(e) = url::Url::parse(&url_str) {
+            return model::AttemptResult {
+                ok: false,
+                rtt_ms: None,
+                error: Some(format!("bad_url: {e}")),
+                meta: serde_json::json!({}),
+            };
+        }
 
         let fut = async {
-            let (mut ws, _resp) = tokio_tungstenite::connect_async(url).await?;
+            let (mut ws, _resp) = tokio_tungstenite::connect_async(url_str).await?;
             let payload = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
