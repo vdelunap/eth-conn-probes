@@ -1,4 +1,5 @@
 use prober_core::model::ProbeKind;
+use prober_core::probes::ProbeFn;
 
 #[tokio::test]
 async fn http_control_works_with_mockito() {
@@ -50,7 +51,8 @@ async fn model_kinds_are_stable() {
         ProbeKind::HttpsJsonRpc,
         ProbeKind::WssJsonRpc,
         ProbeKind::Discv5Ping,
-    ];
+    ]
+    .to_vec();
     assert_eq!(kinds.len(), 6);
 }
 

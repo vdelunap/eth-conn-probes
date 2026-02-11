@@ -1,5 +1,6 @@
 use crate::{config, model};
 use anyhow::Context;
+use std::sync::Arc;
 
 pub mod dns;
 pub mod http_control;
@@ -10,11 +11,20 @@ pub mod wss_jsonrpc;
 #[cfg(feature = "discv5")]
 pub mod discv5_ping;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProbeJob {
     pub kind: model::ProbeKind,
     pub target_label: String,
-    pub run: Box<dyn ProbeFn + Send + Sync>,
+    pub run: Arc<dyn ProbeFn + Send + Sync>,
+}
+
+impl std::fmt::Debug for ProbeJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProbeJob")
+            .field("kind", &self.kind)
+            .field("target_label", &self.target_label)
+            .finish()
+    }
 }
 
 #[async_trait::async_trait]
@@ -31,7 +41,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::HttpControl,
             target_label: url.clone(),
-            run: Box::new(http_control::HttpControlProbe {
+            run: Arc::new(http_control::HttpControlProbe {
                 url,
                 expect_body: expect,
             }),
@@ -42,7 +52,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::DnsResolve,
             target_label: format!("{} ({})", t.host, t.name),
-            run: Box::new(dns::DnsResolveProbe {
+            run: Arc::new(dns::DnsResolveProbe {
                 host: t.host.clone(),
                 port: t.port,
             }),
@@ -51,7 +61,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::TcpConnect,
             target_label: format!("{}:{} ({})", t.host, t.port, t.name),
-            run: Box::new(tcp::TcpConnectProbe {
+            run: Arc::new(tcp::TcpConnectProbe {
                 host: t.host.clone(),
                 port: t.port,
             }),
@@ -62,7 +72,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::HttpsJsonRpc,
             target_label: format!("{} ({})", t.url, t.name),
-            run: Box::new(https_jsonrpc::HttpsJsonRpcProbe {
+            run: Arc::new(https_jsonrpc::HttpsJsonRpcProbe {
                 url: t.url.clone(),
                 method: t.method.clone(),
             }),
@@ -73,7 +83,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::WssJsonRpc,
             target_label: format!("{} ({})", t.url, t.name),
-            run: Box::new(wss_jsonrpc::WssJsonRpcProbe {
+            run: Arc::new(wss_jsonrpc::WssJsonRpcProbe {
                 url: t.url.clone(),
                 method: t.method.clone(),
             }),
@@ -85,7 +95,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::Discv5Ping,
             target_label: format!("{} ({})", &t.enr, &t.name),
-            run: Box::new(discv5_ping::Discv5PingProbe { enr: t.enr.clone() }),
+            run: Arc::new(discv5_ping::Discv5PingProbe { enr: t.enr.clone() }),
         });
     }
 
