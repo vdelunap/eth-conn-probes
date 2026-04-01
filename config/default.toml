@@ -1,31 +1,131 @@
 [run]
-attempts = 3
+attempts     = 3
 min_successes = 1
-timeout_ms = 3500
-parallelism = 16
+timeout_ms   = 5000
+parallelism  = 16
 
 [client]
-location_label = "home"
-app_channel = "dev"
+# location_label is informational only; the server derives actual location from IP.
+location_label = ""
+app_channel    = "cli"
+client_id      = ""
 
 [reporting]
-enabled = true
-# add real host in future updates
+enabled    = true
+# TODO: replace with real server IP once deployed to DigitalOcean
 report_url = "http://146.146.146.146:8080/report"
-timeout_ms = 3000
+timeout_ms = 5000
 
 [probes.control_http]
-enabled = true
-# add real host in future updates
-url = "http://146.146.146.146:8080/ping"
-expect_body = "ok"
+# Disabled until the server is deployed.
+enabled      = false
+url          = "http://146.146.146.146:8080/ping"
+expect_body  = "ok"
+
+# ---------------------------------------------------------------------------
+# TCP targets — each entry generates a DNS resolve probe AND a TCP connect
+# probe automatically.  All providers use port 443 (HTTPS/TLS).
+# ---------------------------------------------------------------------------
 
 [[probes.tcp]]
-name = "ethereum-publicnode-https"
+name = "publicnode"
 host = "ethereum-rpc.publicnode.com"
 port = 443
 
+[[probes.tcp]]
+name = "cloudflare"
+host = "cloudflare-eth.com"
+port = 443
+
+[[probes.tcp]]
+name = "llamarpc"
+host = "eth.llamarpc.com"
+port = 443
+
+[[probes.tcp]]
+name = "drpc"
+host = "eth.drpc.org"
+port = 443
+
+[[probes.tcp]]
+name = "flashbots"
+host = "rpc.flashbots.net"
+port = 443
+
+[[probes.tcp]]
+name = "1rpc"
+host = "1rpc.io"
+port = 443
+
+[[probes.tcp]]
+name = "mevblocker"
+host = "rpc.mevblocker.io"
+port = 443
+
+[[probes.tcp]]
+name = "blast"
+host = "eth-mainnet.public.blastapi.io"
+port = 443
+
+# ---------------------------------------------------------------------------
+# HTTPS JSON-RPC — sends eth_chainId and checks the response has a "result".
+# ---------------------------------------------------------------------------
+
 [[probes.https_jsonrpc]]
-name = "ethereum-publicnode-https"
-url = "https://ethereum-rpc.publicnode.com"
+name   = "publicnode"
+url    = "https://ethereum-rpc.publicnode.com"
+method = "eth_chainId"
+
+[[probes.https_jsonrpc]]
+name   = "cloudflare"
+url    = "https://cloudflare-eth.com"
+method = "eth_chainId"
+
+[[probes.https_jsonrpc]]
+name   = "llamarpc"
+url    = "https://eth.llamarpc.com"
+method = "eth_chainId"
+
+[[probes.https_jsonrpc]]
+name   = "drpc"
+url    = "https://eth.drpc.org"
+method = "eth_chainId"
+
+[[probes.https_jsonrpc]]
+name   = "flashbots"
+url    = "https://rpc.flashbots.net"
+method = "eth_chainId"
+
+[[probes.https_jsonrpc]]
+name   = "1rpc"
+url    = "https://1rpc.io/eth"
+method = "eth_chainId"
+
+[[probes.https_jsonrpc]]
+name   = "mevblocker"
+url    = "https://rpc.mevblocker.io"
+method = "eth_chainId"
+
+[[probes.https_jsonrpc]]
+name   = "blast"
+url    = "https://eth-mainnet.public.blastapi.io"
+method = "eth_chainId"
+
+# ---------------------------------------------------------------------------
+# WSS JSON-RPC — only providers with confirmed public WebSocket endpoints.
+# ---------------------------------------------------------------------------
+
+[[probes.wss_jsonrpc]]
+name   = "publicnode"
+url    = "wss://ethereum-rpc.publicnode.com"
+method = "eth_chainId"
+
+[[probes.wss_jsonrpc]]
+name   = "drpc"
+url    = "wss://eth.drpc.org"
+method = "eth_chainId"
+
+[[probes.wss_jsonrpc]]
+name   = "blast"
+url    = "wss://eth-mainnet.public.blastapi.io"
 method = "eth_chainId"

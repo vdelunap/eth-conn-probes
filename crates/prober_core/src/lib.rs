@@ -12,7 +12,7 @@ pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
     let client = model::ClientInfo {
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
-        location_label: cfg.client.location_label.clone(),
+        client_id: cfg.client.client_id.clone(),
         app_channel: cfg.client.app_channel.clone(),
     };
 
@@ -23,6 +23,7 @@ pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
 
     Ok(model::Report {
         run_id,
+        timestamp: model::ms_to_iso8601(started_at_ms),
         started_at_ms,
         finished_at_ms,
         client,
