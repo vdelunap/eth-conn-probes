@@ -1,19 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
 
-export function loadConfig() {
-  const v = localStorage.getItem('eth-prober.configToml')
-  return v ?? ''
-}
-
-export function saveConfig(v) {
-  localStorage.setItem('eth-prober.configToml', v)
-}
-
 /**
- * Calls the Tauri Rust backend command.
- * Rust returns JSON string; we parse it here.
+ * Runs all probes and optionally sends the report to the server.
+ *
+ * @param {boolean} noSend - if true, the report is kept local and not sent.
+ * @returns {Promise<{ report: Report, send: { kind: string, reason?: string } }>}
  */
-export async function runPlanToml(configToml, noSend) {
-  const json = await invoke('run_plan_toml', { configToml, noSend })
+export async function runProbes(noSend) {
+  const json = await invoke('run_probes', { noSend })
   return JSON.parse(json)
 }

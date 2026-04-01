@@ -1,27 +1,406 @@
-import React, { useMemo, useState } from 'react'
-import { defaultConfigToml } from './lib/defaults.js'
-import { loadConfig, runPlanToml, saveConfig } from './lib/api.js'
+import { useState, useMemo } from 'react'
+import { runProbes } from './lib/api.js'
 
-function App() {
-  const initial = useMemo(function getInitial() {
-    const stored = loadConfig()
-    return stored.length > 0 ? stored : defaultConfigToml
-  }, [])
+// --- Styles ---
 
-  const [configToml, setConfigToml] = useState(initial)
-  const [noSend, setNoSend] = useState(false)
+const S = {
+  page: {
+    minHeight: '100vh',
+    background: '#0f1117',
+    color: '#e2e8f0',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+    padding: '32px 24px',
+    boxSizing: 'border-box',
+  },
+  inner: {
+    maxWidth: 860,
+    margin: '0 auto',
+  },
+  title: {
+    margin: '0 0 4px',
+    fontSize: 22,
+    fontWeight: 700,
+    color: '#f8fafc',
+    letterSpacing: '-0.3px',
+  },
+  subtitle: {
+    margin: '0 0 28px',
+    fontSize: 13,
+    color: '#94a3b8',
+    lineHeight: 1.5,
+  },
+  controls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    marginBottom: 28,
+  },
+  toggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 13,
+    color: '#cbd5e1',
+    cursor: 'pointer',
+    userSelect: 'none',
+  },
+  checkbox: {
+    width: 15,
+    height: 15,
+    accentColor: '#6366f1',
+    cursor: 'pointer',
+  },
+  button: {
+    padding: '8px 20px',
+    fontSize: 13,
+    fontWeight: 600,
+    background: '#6366f1',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
+    transition: 'background 0.15s',
+  },
+  buttonDisabled: {
+    background: '#3730a3',
+    color: '#a5b4fc',
+    cursor: 'not-allowed',
+  },
+  spinner: {
+    display: 'inline-block',
+    width: 12,
+    height: 12,
+    border: '2px solid #a5b4fc',
+    borderTopColor: 'transparent',
+    borderRadius: '50%',
+    animation: 'spin 0.7s linear infinite',
+    marginRight: 7,
+    verticalAlign: 'middle',
+  },
+  sendBadge: (kind) => ({
+    display: 'inline-block',
+    padding: '2px 9px',
+    borderRadius: 4,
+    fontSize: 11,
+    fontWeight: 600,
+    background: kind === 'sent' ? '#14532d' : kind === 'failed' ? '#450a0a' : '#1e293b',
+    color: kind === 'sent' ? '#86efac' : kind === 'failed' ? '#fca5a5' : '#94a3b8',
+    border: `1px solid ${kind === 'sent' ? '#166534' : kind === 'failed' ? '#7f1d1d' : '#334155'}`,
+  }),
+  errorBox: {
+    padding: '10px 14px',
+    background: '#450a0a',
+    border: '1px solid #7f1d1d',
+    borderRadius: 6,
+    color: '#fca5a5',
+    fontSize: 13,
+    marginBottom: 20,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#64748b',
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    marginBottom: 10,
+  },
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: 13,
+  },
+  th: {
+    textAlign: 'left',
+    padding: '7px 10px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#64748b',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    borderBottom: '1px solid #1e293b',
+  },
+  thRight: {
+    textAlign: 'right',
+    padding: '7px 10px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#64748b',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    borderBottom: '1px solid #1e293b',
+  },
+  td: {
+    padding: '7px 10px',
+    borderBottom: '1px solid #1e293b',
+    color: '#cbd5e1',
+  },
+  tdRight: {
+    padding: '7px 10px',
+    borderBottom: '1px solid #1e293b',
+    color: '#cbd5e1',
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  okBadge: (ok) => ({
+    display: 'inline-block',
+    padding: '1px 7px',
+    borderRadius: 3,
+    fontSize: 11,
+    fontWeight: 700,
+    background: ok ? '#14532d' : '#450a0a',
+    color: ok ? '#86efac' : '#fca5a5',
+  }),
+  kindTag: {
+    display: 'inline-block',
+    padding: '1px 7px',
+    borderRadius: 3,
+    fontSize: 11,
+    fontWeight: 600,
+    background: '#1e293b',
+    color: '#94a3b8',
+    fontFamily: 'ui-monospace, monospace',
+  },
+  reasonText: (category) => {
+    const colors = {
+      rate_limited:  '#f59e0b',  // amber  — free-tier throttle, not a real block
+      auth_required: '#a78bfa',  // purple — provider requires an API key
+      rpc_error:     '#f97316',  // orange — provider replied but with an error
+      api_error:     '#f97316',  // orange — unexpected response structure
+      http_error:    '#ef4444',  // red    — bad HTTP status
+      network:       '#ef4444',  // red    — TCP/connection failure
+      dns_error:     '#ef4444',  // red    — name not resolved
+      timeout:       '#ef4444',  // red    — no response in time
+    }
+    return {
+      fontSize: 11,
+      color: colors[category] ?? '#94a3b8',
+      fontFamily: 'ui-monospace, monospace',
+    }
+  },
+  statRow: {
+    display: 'flex',
+    gap: 24,
+    marginBottom: 16,
+    flexWrap: 'wrap',
+  },
+  stat: {
+    fontSize: 13,
+    color: '#94a3b8',
+  },
+  statNum: {
+    fontWeight: 700,
+    color: '#e2e8f0',
+  },
+  thSortable: {
+    textAlign: 'left',
+    padding: '7px 10px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#64748b',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    borderBottom: '1px solid #1e293b',
+    cursor: 'pointer',
+    userSelect: 'none',
+    whiteSpace: 'nowrap',
+  },
+  thSortableActive: {
+    color: '#a5b4fc',
+  },
+}
+
+// --- Helpers ---
+
+const KIND_LABELS = {
+  dns_resolve: 'DNS',
+  tcp_connect: 'TCP',
+  http_control: 'HTTP-ctrl',
+  https_json_rpc: 'HTTPS RPC',
+  wss_json_rpc: 'WSS RPC',
+  discv5_ping: 'DiscV5',
+}
+
+/**
+ * Returns { error, category } for a failed probe by inspecting its attempts.
+ * Uses the last attempt that has an error (most recent retry).
+ */
+function getFailureInfo(r) {
+  if (r.summary.ok) return { error: null, category: null }
+  for (let i = r.attempts.length - 1; i >= 0; i--) {
+    const a = r.attempts[i]
+    if (a.error) {
+      const category = a.meta?.category ?? null
+      return { error: a.error, category }
+    }
+  }
+  return { error: 'unknown failure', category: null }
+}
+
+/** Extracts the short provider name from a target string like "host (name)". */
+function parseTarget(target) {
+  const match = target.match(/\(([^)]+)\)$/)
+  if (match) {
+    return { name: match[1], host: target.slice(0, target.lastIndexOf(' (')).trim() }
+  }
+  return { name: target, host: target }
+}
+
+function fmt(ms) {
+  if (ms == null) return '—'
+  return ms + ' ms'
+}
+
+function duration(report) {
+  const ms = report.finished_at_ms - report.started_at_ms
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
+}
+
+// --- Sub-components ---
+
+function SendStatus({ send }) {
+  const label = send.kind === 'sent'
+    ? 'Report sent'
+    : send.kind === 'skipped'
+    ? 'Report not sent (local only)'
+    : `Send failed: ${send.reason ?? ''}`
+
+  return (
+    <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+      <span style={{ color: '#64748b' }}>Report:</span>
+      <span style={S.sendBadge(send.kind)}>{label}</span>
+    </div>
+  )
+}
+
+// Sort direction cycles: null → 'asc' → 'desc' → null
+const SORT_ICONS = { null: ' ↕', asc: ' ↑', desc: ' ↓' }
+
+// Fixed sort priority: protocol > provider > status.
+// Each column can be toggled independently (null/asc/desc).
+function ResultsTable({ results }) {
+  const [sort, setSort] = useState({ protocol: null, provider: null, status: null })
+
+  function toggleSort(col) {
+    setSort(prev => {
+      const cur = prev[col]
+      const next = cur === null ? 'asc' : cur === 'asc' ? 'desc' : null
+      return { ...prev, [col]: next }
+    })
+  }
+
+  const sorted = useMemo(() => {
+    const items = [...results]
+    // Apply sorts in fixed priority order: protocol, then provider, then status.
+    items.sort((a, b) => {
+      const checks = [
+        [sort.protocol, KIND_LABELS[a.kind] ?? a.kind,          KIND_LABELS[b.kind] ?? b.kind],
+        [sort.provider, parseTarget(a.target).name,              parseTarget(b.target).name],
+        [sort.status,   a.summary.ok ? 'OK' : 'FAIL',           b.summary.ok ? 'OK' : 'FAIL'],
+      ]
+      for (const [dir, aVal, bVal] of checks) {
+        if (!dir) continue
+        const cmp = aVal.localeCompare(bVal)
+        if (cmp !== 0) return dir === 'asc' ? cmp : -cmp
+      }
+      return 0
+    })
+    return items
+  }, [results, sort])
+
+  function thSort(col, label) {
+    const active = sort[col] !== null
+    return (
+      <th
+        style={active ? { ...S.thSortable, ...S.thSortableActive } : S.thSortable}
+        onClick={() => toggleSort(col)}
+      >
+        {label}{SORT_ICONS[sort[col]] ?? SORT_ICONS.null}
+      </th>
+    )
+  }
+
+  return (
+    <table style={S.table}>
+      <thead>
+        <tr>
+          {thSort('protocol', 'Protocol')}
+          {thSort('provider', 'Provider')}
+          <th style={S.th}>Target</th>
+          {thSort('status', 'Status')}
+          <th style={S.th}>Reason</th>
+          <th style={S.thRight}>avg RTT</th>
+          <th style={S.thRight}>min</th>
+          <th style={S.thRight}>max</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((r) => {
+          const { name, host } = parseTarget(r.target)
+          const { error, category } = getFailureInfo(r)
+          return (
+            <tr key={`${r.kind}:${r.target}`}>
+              <td style={S.td}>
+                <span style={S.kindTag}>{KIND_LABELS[r.kind] ?? r.kind}</span>
+              </td>
+              <td style={S.td}>{name}</td>
+              <td style={{ ...S.td, color: '#64748b', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>{host}</td>
+              <td style={S.tdRight}>
+                <span style={S.okBadge(r.summary.ok)}>{r.summary.ok ? 'OK' : 'FAIL'}</span>
+              </td>
+              <td style={S.td}>
+                {error && <span style={S.reasonText(category)}>{error}</span>}
+              </td>
+              <td style={S.tdRight}>{fmt(r.summary.avg_rtt_ms)}</td>
+              <td style={S.tdRight}>{fmt(r.summary.min_rtt_ms)}</td>
+              <td style={S.tdRight}>{fmt(r.summary.max_rtt_ms)}</td>
+            </tr>
+          )
+        })}
+      </tbody>
+    </table>
+  )
+}
+
+function Summary({ report }) {
+  const total = report.results.length
+  const ok = report.results.filter((r) => r.summary.ok).length
+  const failed = total - ok
+
+  return (
+    <div style={S.statRow}>
+      <span style={S.stat}>
+        Probes: <span style={S.statNum}>{total}</span>
+      </span>
+      <span style={S.stat}>
+        OK: <span style={{ ...S.statNum, color: '#86efac' }}>{ok}</span>
+      </span>
+      <span style={S.stat}>
+        Failed: <span style={{ ...S.statNum, color: failed > 0 ? '#fca5a5' : '#e2e8f0' }}>{failed}</span>
+      </span>
+      <span style={S.stat}>
+        Duration: <span style={S.statNum}>{duration(report)}</span>
+      </span>
+    </div>
+  )
+}
+
+// --- Main app ---
+
+export default function App() {
+  const [sendReport, setSendReport] = useState(true)
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
 
-  async function onRun() {
+  async function handleRun() {
     setRunning(true)
     setError(null)
     setResult(null)
-    saveConfig(configToml)
-
     try {
-      const res = await runPlanToml(configToml, noSend)
+      const res = await runProbes(!sendReport)
       setResult(res)
     } catch (e) {
       setError(String(e))
@@ -31,98 +410,69 @@ function App() {
   }
 
   return (
-    <div style={{ padding: 12, fontFamily: 'system-ui, sans-serif', maxWidth: 1100 }}>
-      <h2 style={{ margin: 0 }}>eth-prober</h2>
-      <p style={{ marginTop: 6 }}>
-        Edit TOML, run probes, optionally send report to 146.146.146.146:8080.
-      </p>
+    <>
+      {/* Keyframe for spinner — injected once via a style tag */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            type='checkbox'
-            checked={noSend}
-            onChange={(e) => setNoSend(e.target.checked)}
-          />
-          Do not send report (local only)
-        </label>
+      <div style={S.page}>
+        <div style={S.inner}>
 
-        <button onClick={onRun} disabled={running} style={{ padding: '6px 10px' }}>
-          {running ? 'Running…' : 'Run probes'}
-        </button>
-      </div>
-
-      <div style={{ marginTop: 12 }}>
-        <textarea
-          value={configToml}
-          onChange={(e) => setConfigToml(e.target.value)}
-          spellCheck={false}
-          style={{
-            width: '100%',
-            height: 260,
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            fontSize: 12
-          }}
-        />
-      </div>
-
-      {error !== null ? <pre style={{ marginTop: 12, color: 'crimson' }}>{error}</pre> : null}
-
-      {result !== null ? (
-        <div style={{ marginTop: 12 }}>
-          <h3 style={{ marginBottom: 6 }}>Summary</h3>
-          <p style={{ marginTop: 0 }}>
-            Send status:{' '}
-            {result.send?.kind === 'sent'
-              ? 'sent'
-              : result.send?.kind === 'queued'
-                ? `queued (${result.send.reason})`
-                : 'unknown'}
+          {/* Header */}
+          <h1 style={S.title}>Ethereum Connectivity Prober</h1>
+          <p style={S.subtitle}>
+            Tests DNS, TCP, HTTPS JSON-RPC, and WebSocket connectivity to 9 public Ethereum
+            RPC endpoints. Results can optionally be submitted as an anonymous connectivity
+            report to help map network access across regions.
           </p>
 
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                <th align='left'>Probe</th>
-                <th align='left'>Target</th>
-                <th align='right'>OK</th>
-                <th align='right'>avg ms</th>
-                <th align='right'>min ms</th>
-                <th align='right'>max ms</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.report.results.map(function row(r) {
-                return (
-                  <tr key={`${r.kind}:${r.target}`}>
-                    <td style={{ padding: '6px 4px' }}>{r.kind}</td>
-                    <td style={{ padding: '6px 4px' }}>{r.target}</td>
-                    <td align='right' style={{ padding: '6px 4px' }}>
-                      {r.summary.ok ? 'yes' : 'no'}
-                    </td>
-                    <td align='right' style={{ padding: '6px 4px' }}>
-                      {r.summary.avg_rtt_ms ?? '-'}
-                    </td>
-                    <td align='right' style={{ padding: '6px 4px' }}>
-                      {r.summary.min_rtt_ms ?? '-'}
-                    </td>
-                    <td align='right' style={{ padding: '6px 4px' }}>
-                      {r.summary.max_rtt_ms ?? '-'}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          {/* Controls */}
+          <div style={S.controls}>
+            <label style={S.toggle}>
+              <input
+                type="checkbox"
+                style={S.checkbox}
+                checked={sendReport}
+                onChange={(e) => setSendReport(e.target.checked)}
+              />
+              Send anonymous report
+            </label>
 
-          <h3 style={{ marginTop: 12, marginBottom: 6 }}>Raw JSON</h3>
-          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
-            {JSON.stringify(result, null, 2)}
-          </pre>
+            <button
+              onClick={handleRun}
+              disabled={running}
+              style={running ? { ...S.button, ...S.buttonDisabled } : S.button}
+            >
+              {running && <span style={S.spinner} />}
+              {running ? 'Running…' : 'Run probes'}
+            </button>
+          </div>
+
+          {/* Error */}
+          {error !== null && (
+            <div style={S.errorBox}>
+              <strong>Error:</strong> {error}
+            </div>
+          )}
+
+          {/* Results */}
+          {result !== null && (
+            <div>
+              <SendStatus send={result.send} />
+
+              <div style={S.section}>
+                <div style={S.sectionTitle}>Summary</div>
+                <Summary report={result.report} />
+              </div>
+
+              <div style={S.section}>
+                <div style={S.sectionTitle}>Results</div>
+                <ResultsTable results={result.report.results} />
+              </div>
+            </div>
+          )}
+
         </div>
-      ) : null}
-    </div>
+      </div>
+    </>
   )
 }
-
-export default App

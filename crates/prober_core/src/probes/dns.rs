@@ -21,24 +21,34 @@ impl super::ProbeFn for DnsResolveProbe {
         match res {
             Ok(Ok(iter)) => {
                 let addrs: Vec<String> = iter.map(|a| a.to_string()).collect();
-                model::AttemptResult {
-                    ok: !addrs.is_empty(),
-                    rtt_ms: Some(model::now_ms().saturating_sub(started)),
-                    error: None,
-                    meta: serde_json::json!({ "addrs": addrs }),
+                if addrs.is_empty() {
+                    // DNS query succeeded but returned no address records.
+                    model::AttemptResult {
+                        ok: false,
+                        rtt_ms: Some(model::now_ms().saturating_sub(started)),
+                        error: Some("no address records returned".to_string()),
+                        meta: serde_json::json!({ "addrs": [], "category": "dns_error" }),
+                    }
+                } else {
+                    model::AttemptResult {
+                        ok: true,
+                        rtt_ms: Some(model::now_ms().saturating_sub(started)),
+                        error: None,
+                        meta: serde_json::json!({ "addrs": addrs }),
+                    }
                 }
             }
             Ok(Err(e)) => model::AttemptResult {
                 ok: false,
                 rtt_ms: Some(model::now_ms().saturating_sub(started)),
-                error: Some(format!("dns_error: {e}")),
-                meta: serde_json::json!({}),
+                error: Some(format!("DNS lookup failed: {e}")),
+                meta: serde_json::json!({ "category": "dns_error" }),
             },
             Err(_) => model::AttemptResult {
                 ok: false,
                 rtt_ms: None,
-                error: Some("timeout".to_string()),
-                meta: serde_json::json!({}),
+                error: Some("DNS lookup timed out".to_string()),
+                meta: serde_json::json!({ "category": "timeout" }),
             },
         }
     }
