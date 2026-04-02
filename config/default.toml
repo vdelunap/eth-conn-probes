@@ -125,7 +125,44 @@ name   = "drpc"
 url    = "wss://eth.drpc.org"
 method = "eth_chainId"
 
-[[probes.wss_jsonrpc]]
-name   = "blast"
-url    = "wss://eth-mainnet.public.blastapi.io"
-method = "eth_chainId"
+# ---------------------------------------------------------------------------
+# P2P boot nodes — TCP connect to port 30303 (RLPx + DiscV5).
+# If this port is blocked while 443 works → selective Ethereum P2P censorship.
+# IPs are stable Ethereum Foundation boot nodes.
+# ---------------------------------------------------------------------------
+
+[[probes.p2p_boot_nodes]]
+name = "EF-asia-pacific"
+host = "18.138.108.67"
+port = 30303
+
+[[probes.p2p_boot_nodes]]
+name = "EF-us-east"
+host = "3.209.45.79"
+port = 30303
+
+[[probes.p2p_boot_nodes]]
+name = "EF-southeast-asia"
+host = "52.187.207.27"
+port = 30303
+
+# ---------------------------------------------------------------------------
+# DNS comparison — system resolver vs Cloudflare DoH (1.1.1.1).
+# System returns nothing but DoH succeeds → DNS block suspected.
+# ---------------------------------------------------------------------------
+
+[[probes.dns_compare]]
+name = "publicnode"
+host = "ethereum-rpc.publicnode.com"
+
+[[probes.dns_compare]]
+name = "cloudflare"
+host = "cloudflare-eth.com"
+
+[[probes.dns_compare]]
+name = "llamarpc"
+host = "eth.llamarpc.com"
+
+[[probes.dns_compare]]
+name = "drpc"
+host = "eth.drpc.org"

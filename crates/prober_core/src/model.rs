@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct Report {
     pub run_id: String,
     /// ISO 8601 UTC timestamp of when the run started (e.g. "2026-04-02T14:30:00.123Z").
-    /// Use this field for database storage.
     pub timestamp: String,
-    /// Unix epoch in milliseconds — kept for precision and legacy compatibility.
     pub started_at_ms: u128,
     pub finished_at_ms: u128,
     pub client: ClientInfo,
@@ -19,7 +17,6 @@ pub struct ClientInfo {
     pub os: String,
     pub arch: String,
     /// Persistent random UUID generated on first launch and stored locally.
-    /// Identifies the device across multiple report submissions without collecting PII.
     pub client_id: String,
     pub app_channel: String,
 }
@@ -53,11 +50,21 @@ pub struct AttemptResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProbeKind {
+    // --- RPC provider availability ---
     DnsResolve,
     TcpConnect,
     HttpControl,
     HttpsJsonRpc,
     WssJsonRpc,
+
+    // --- Ethereum P2P network ---
+    /// TCP connect to an Ethereum boot node on port 30303 (RLPx/DiscV5 protocol port).
+    /// If this fails while port 443 works, it indicates selective port blocking.
+    P2pTcpConnect,
+    /// Compares the system resolver result against Cloudflare DoH (1.1.1.1).
+    /// A mismatch or system-only failure indicates potential DNS poisoning or blocking.
+    DnsCompare,
+
     Discv5Ping,
 }
 
@@ -69,7 +76,6 @@ pub fn now_ms() -> u128 {
         .as_millis()
 }
 
-/// Formats a Unix millisecond timestamp as an ISO 8601 UTC string.
 pub fn ms_to_iso8601(ms: u128) -> String {
     use chrono::{DateTime, Utc};
     let secs = (ms / 1000) as i64;
@@ -85,14 +91,8 @@ pub fn summarize_attempts(attempts: &[AttemptResult], min_successes: u32) -> Pro
     let mut rtts: Vec<u128> = Vec::new();
 
     for a in attempts {
-        if a.ok {
-            ok_count += 1;
-        } else {
-            fail_count += 1;
-        }
-        if let Some(rtt) = a.rtt_ms {
-            rtts.push(rtt);
-        }
+        if a.ok { ok_count += 1; } else { fail_count += 1; }
+        if let Some(rtt) = a.rtt_ms { rtts.push(rtt); }
     }
 
     rtts.sort_unstable();

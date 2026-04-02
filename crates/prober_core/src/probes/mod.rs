@@ -3,6 +3,7 @@ use anyhow::Context;
 use std::sync::Arc;
 
 pub mod dns;
+pub mod dns_compare;
 pub mod http_control;
 pub mod https_jsonrpc;
 pub mod tcp;
@@ -35,6 +36,8 @@ pub trait ProbeFn {
 pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
     let mut jobs: Vec<ProbeJob> = Vec::new();
 
+    // ---- Section 1: RPC provider availability ----
+
     if cfg.probes.control_http.enabled {
         let url = cfg.probes.control_http.url.clone();
         let expect = cfg.probes.control_http.expect_body.clone();
@@ -48,6 +51,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
+    // Each TCP target generates two probes: DNS resolve + TCP connect.
     for t in &cfg.probes.tcp {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::DnsResolve,
@@ -96,6 +100,32 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
             kind: model::ProbeKind::Discv5Ping,
             target_label: format!("{} ({})", &t.enr, &t.name),
             run: Arc::new(discv5_ping::Discv5PingProbe { enr: t.enr.clone() }),
+        });
+    }
+
+    // ---- Section 2: Ethereum P2P network ----
+
+    // Boot nodes are raw IPs — no DNS probe needed.
+    // Port 30303 is the standard Ethereum P2P port (RLPx + DiscV5).
+    for t in &cfg.probes.p2p_boot_nodes {
+        jobs.push(ProbeJob {
+            kind: model::ProbeKind::P2pTcpConnect,
+            target_label: format!("{}:{} ({})", t.host, t.port, t.name),
+            run: Arc::new(tcp::TcpConnectProbe {
+                host: t.host.clone(),
+                port: t.port,
+            }),
+        });
+    }
+
+    // DNS comparison: system resolver vs Cloudflare DoH (1.1.1.1).
+    for t in &cfg.probes.dns_compare {
+        jobs.push(ProbeJob {
+            kind: model::ProbeKind::DnsCompare,
+            target_label: format!("{} ({})", t.host, t.name),
+            run: Arc::new(dns_compare::DnsCompareProbe {
+                host: t.host.clone(),
+            }),
         });
     }
 
