@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 discv5 = ["dep:discv5"]
+discv4 = ["dep:k256", "dep:sha3", "dep:rand"]
 
 [dependencies]
 anyhow = "1.0.100"
@@ -23,6 +24,9 @@ toml = "0.9.11"
 chrono = { version = "0.4", features = ["serde"] }
 
 discv5 = { version = "0.10.2", optional = true }
+k256   = { version = "0.13", features = ["ecdsa"], optional = true }
+sha3   = { version = "0.10", optional = true }
+rand   = { version = "0.8", optional = true }
 
 [dev-dependencies]
 mockito = "1.7.1"
