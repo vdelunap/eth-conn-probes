@@ -215,13 +215,18 @@ const S = {
 // --- Helpers ---
 
 const KIND_LABELS = {
-  dns_resolve: 'DNS',
-  tcp_connect: 'TCP',
-  http_control: 'HTTP-ctrl',
-  https_json_rpc: 'HTTPS RPC',
-  wss_json_rpc: 'WSS RPC',
-  discv5_ping: 'DiscV5',
+  dns_resolve:     'DNS',
+  tcp_connect:     'TCP',
+  http_control:    'HTTP-ctrl',
+  https_json_rpc:  'HTTPS RPC',
+  wss_json_rpc:    'WSS RPC',
+  discv5_ping:     'DiscV5',
+  p2p_tcp_connect: 'P2P TCP',
+  dns_compare:     'DNS Compare',
 }
+
+// Probe kinds that belong to the P2P / censorship-detection section.
+const P2P_KINDS = new Set(['p2p_tcp_connect', 'dns_compare'])
 
 /**
  * Returns { error, category } for a failed probe by inspecting its attempts.
@@ -237,6 +242,24 @@ function getFailureInfo(r) {
     }
   }
   return { error: 'unknown failure', category: null }
+}
+
+/**
+ * For dns_compare probes, returns a human-readable summary of the IP comparison
+ * from the last attempt's meta, to show in the Reason column.
+ */
+function getDnsCompareReason(r) {
+  const last = r.attempts[r.attempts.length - 1]
+  if (!last) return null
+  const { system_ips = [], doh_ips = [], ip_mismatch } = last.meta ?? {}
+  if (last.error) return { text: last.error, category: last.meta?.category ?? null }
+  if (ip_mismatch) {
+    return {
+      text: `IP mismatch — system: ${system_ips.join(', ')} | DoH: ${doh_ips.join(', ')}`,
+      category: 'rpc_error',
+    }
+  }
+  return null
 }
 
 /** Extracts the short provider name from a target string like "host (name)". */
@@ -339,7 +362,9 @@ function ResultsTable({ results }) {
       <tbody>
         {sorted.map((r) => {
           const { name, host } = parseTarget(r.target)
-          const { error, category } = getFailureInfo(r)
+          const reason = r.kind === 'dns_compare'
+            ? getDnsCompareReason(r)
+            : (() => { const { error, category } = getFailureInfo(r); return error ? { text: error, category } : null })()
           return (
             <tr key={`${r.kind}:${r.target}`}>
               <td style={S.td}>
@@ -351,7 +376,7 @@ function ResultsTable({ results }) {
                 <span style={S.okBadge(r.summary.ok)}>{r.summary.ok ? 'OK' : 'FAIL'}</span>
               </td>
               <td style={S.td}>
-                {error && <span style={S.reasonText(category)}>{error}</span>}
+                {reason && <span style={S.reasonText(reason.category)}>{reason.text}</span>}
               </td>
               <td style={S.tdRight}>{fmt(r.summary.avg_rtt_ms)}</td>
               <td style={S.tdRight}>{fmt(r.summary.min_rtt_ms)}</td>
@@ -364,25 +389,17 @@ function ResultsTable({ results }) {
   )
 }
 
-function Summary({ report }) {
-  const total = report.results.length
-  const ok = report.results.filter((r) => r.summary.ok).length
+function Summary({ results, durationStr }) {
+  const total = results.length
+  const ok = results.filter((r) => r.summary.ok).length
   const failed = total - ok
 
   return (
     <div style={S.statRow}>
-      <span style={S.stat}>
-        Probes: <span style={S.statNum}>{total}</span>
-      </span>
-      <span style={S.stat}>
-        OK: <span style={{ ...S.statNum, color: '#86efac' }}>{ok}</span>
-      </span>
-      <span style={S.stat}>
-        Failed: <span style={{ ...S.statNum, color: failed > 0 ? '#fca5a5' : '#e2e8f0' }}>{failed}</span>
-      </span>
-      <span style={S.stat}>
-        Duration: <span style={S.statNum}>{duration(report)}</span>
-      </span>
+      <span style={S.stat}>Probes: <span style={S.statNum}>{total}</span></span>
+      <span style={S.stat}>OK: <span style={{ ...S.statNum, color: '#86efac' }}>{ok}</span></span>
+      <span style={S.stat}>Failed: <span style={{ ...S.statNum, color: failed > 0 ? '#fca5a5' : '#e2e8f0' }}>{failed}</span></span>
+      {durationStr && <span style={S.stat}>Duration: <span style={S.statNum}>{durationStr}</span></span>}
     </div>
   )
 }
@@ -420,9 +437,9 @@ export default function App() {
           {/* Header */}
           <h1 style={S.title}>Ethereum Connectivity Prober</h1>
           <p style={S.subtitle}>
-            Tests DNS, TCP, HTTPS JSON-RPC, and WebSocket connectivity to 9 public Ethereum
-            RPC endpoints. Results can optionally be submitted as an anonymous connectivity
-            report to help map network access across regions.
+            Tests RPC provider availability and Ethereum P2P network reachability from your
+            location. Results can optionally be submitted as an anonymous report to help map
+            network access across regions.
           </p>
 
           {/* Controls */}
@@ -455,21 +472,38 @@ export default function App() {
           )}
 
           {/* Results */}
-          {result !== null && (
-            <div>
-              <SendStatus send={result.send} />
+          {result !== null && (() => {
+            const rpcResults = result.report.results.filter(r => !P2P_KINDS.has(r.kind))
+            const p2pResults = result.report.results.filter(r => P2P_KINDS.has(r.kind))
+            return (
+              <div>
+                <SendStatus send={result.send} />
 
-              <div style={S.section}>
-                <div style={S.sectionTitle}>Summary</div>
-                <Summary report={result.report} />
-              </div>
+                <div style={S.section}>
+                  <div style={S.sectionTitle}>Section 1 — RPC provider availability</div>
+                  <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
+                    Tests whether public Ethereum RPC endpoints are reachable from your location.
+                    This covers the access layer used by wallets (MetaMask, etc.) and dapps.
+                  </p>
+                  <Summary results={rpcResults} durationStr={duration(result.report)} />
+                  <ResultsTable results={rpcResults} />
+                </div>
 
-              <div style={S.section}>
-                <div style={S.sectionTitle}>Results</div>
-                <ResultsTable results={result.report.results} />
+                <div style={S.section}>
+                  <div style={S.sectionTitle}>Section 2 — Ethereum P2P network</div>
+                  <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
+                    Tests whether the Ethereum P2P layer is reachable. Port 30303 is used by
+                    full nodes (RLPx + DiscV5). If TCP:30303 fails while TCP:443 works, it
+                    indicates selective protocol blocking. DNS Compare checks whether your local
+                    resolver returns the same addresses as Cloudflare DoH (1.1.1.1) — a mismatch
+                    or local-only failure may indicate DNS poisoning.
+                  </p>
+                  <Summary results={p2pResults} />
+                  <ResultsTable results={p2pResults} />
+                </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
 
         </div>
       </div>
