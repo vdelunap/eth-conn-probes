@@ -2,12 +2,16 @@ use crate::{config, model};
 use anyhow::Context;
 use std::sync::Arc;
 
+pub mod beacon_https;
 pub mod dns;
 pub mod dns_compare;
 pub mod http_control;
 pub mod https_jsonrpc;
 pub mod tcp;
 pub mod wss_jsonrpc;
+
+#[cfg(feature = "discv4")]
+pub mod discv4_ping;
 
 #[cfg(feature = "discv5")]
 pub mod discv5_ping;
@@ -94,8 +98,10 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
+    // DiscV5 pings to execution layer boot nodes (ENRs on port 30303).
+    // Empty by default — execution nodes advertise enode://, not enr:-.
     #[cfg(feature = "discv5")]
-    for t in &cfg.probes.discv5_ping {
+    for t in &cfg.probes.discv5_execution {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::Discv5Ping,
             target_label: format!("{} ({})", &t.enr, &t.name),
@@ -103,15 +109,28 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // ---- Section 2: Ethereum P2P network ----
+    // ---- Section 2: Ethereum execution layer P2P ----
 
-    // Boot nodes are raw IPs — no DNS probe needed.
-    // Port 30303 is the standard Ethereum P2P port (RLPx + DiscV5).
+    // TCP connect to execution boot nodes on port 30303.
     for t in &cfg.probes.p2p_boot_nodes {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::P2pTcpConnect,
             target_label: format!("{}:{} ({})", t.host, t.port, t.name),
             run: Arc::new(tcp::TcpConnectProbe {
+                host: t.host.clone(),
+                port: t.port,
+            }),
+        });
+    }
+
+    // DiscV4 UDP ping to execution boot nodes on port 30303.
+    // Tests execution-layer peer discovery (devp2p discv4 over UDP).
+    #[cfg(feature = "discv4")]
+    for t in &cfg.probes.discv4_execution {
+        jobs.push(ProbeJob {
+            kind: model::ProbeKind::Discv4Ping,
+            target_label: format!("{}:{} ({})", t.host, t.port, t.name),
+            run: Arc::new(discv4_ping::Discv4PingProbe {
                 host: t.host.clone(),
                 port: t.port,
             }),
@@ -126,6 +145,27 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
             run: Arc::new(dns_compare::DnsCompareProbe {
                 host: t.host.clone(),
             }),
+        });
+    }
+
+    // ---- Section 3: Ethereum consensus layer (Beacon chain) ----
+
+    // DiscV5 pings to consensus boot nodes (ENRs on port 9000).
+    #[cfg(feature = "discv5")]
+    for t in &cfg.probes.discv5_consensus {
+        jobs.push(ProbeJob {
+            kind: model::ProbeKind::BeaconDiscv5Ping,
+            target_label: format!("{} ({})", &t.enr, &t.name),
+            run: Arc::new(discv5_ping::Discv5PingProbe { enr: t.enr.clone() }),
+        });
+    }
+
+    // HTTP GET to public beacon chain REST API endpoints.
+    for t in &cfg.probes.beacon_https {
+        jobs.push(ProbeJob {
+            kind: model::ProbeKind::BeaconHttps,
+            target_label: format!("{} ({})", t.url, t.name),
+            run: Arc::new(beacon_https::BeaconHttpsProbe { url: t.url.clone() }),
         });
     }
 

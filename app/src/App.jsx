@@ -215,18 +215,27 @@ const S = {
 // --- Helpers ---
 
 const KIND_LABELS = {
-  dns_resolve:     'DNS',
-  tcp_connect:     'TCP',
-  http_control:    'HTTP-ctrl',
-  https_json_rpc:  'HTTPS RPC',
-  wss_json_rpc:    'WSS RPC',
-  discv5_ping:     'DiscV5',
-  p2p_tcp_connect: 'P2P TCP',
-  dns_compare:     'DNS Compare',
+  dns_resolve:       'DNS',
+  tcp_connect:       'TCP',
+  http_control:      'HTTP-ctrl',
+  https_json_rpc:    'HTTPS RPC',
+  wss_json_rpc:      'WSS RPC',
+  // Execution layer P2P
+  p2p_tcp_connect:   'P2P TCP',
+  discv4_ping:       'DiscV4 UDP',
+  dns_compare:       'DNS Compare',
+  discv5_ping:       'DiscV5 (exec)',
+  // Consensus layer
+  beacon_discv5_ping: 'DiscV5 (beacon)',
+  beacon_https:       'Beacon API',
 }
 
-// Probe kinds that belong to the P2P / censorship-detection section.
-const P2P_KINDS = new Set(['p2p_tcp_connect', 'dns_compare'])
+// Probe kinds that belong to the execution P2P section.
+const EXEC_P2P_KINDS = new Set(['p2p_tcp_connect', 'discv4_ping', 'dns_compare', 'discv5_ping'])
+// Probe kinds that belong to the consensus / beacon section.
+const BEACON_KINDS = new Set(['beacon_discv5_ping', 'beacon_https'])
+// Combined for any P2P section (used to exclude from RPC section).
+const P2P_KINDS = new Set([...EXEC_P2P_KINDS, ...BEACON_KINDS])
 
 /**
  * Returns { error, category } for a failed probe by inspecting its attempts.
@@ -279,6 +288,50 @@ function fmt(ms) {
 function duration(report) {
   const ms = report.finished_at_ms - report.started_at_ms
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
+}
+
+/**
+ * Detects the pattern: P2P TCP OK + DiscV4 UDP FAIL for the same node name.
+ * Returns the list of node names where this pattern is present.
+ */
+function detectUdpTcpMismatch(execResults) {
+  const tcpOk  = new Set(
+    execResults
+      .filter(r => r.kind === 'p2p_tcp_connect' && r.summary.ok)
+      .map(r => parseTarget(r.target).name)
+  )
+  const udpFail = new Set(
+    execResults
+      .filter(r => r.kind === 'discv4_ping' && !r.summary.ok)
+      .map(r => parseTarget(r.target).name)
+  )
+  return [...tcpOk].filter(n => udpFail.has(n))
+}
+
+function UdpTcpMismatchNote({ nodes }) {
+  if (nodes.length === 0) return null
+  return (
+    <div style={{
+      marginTop: 12,
+      padding: '10px 14px',
+      background: '#1c1f2e',
+      border: '1px solid #334155',
+      borderLeft: '3px solid #f59e0b',
+      borderRadius: 4,
+      fontSize: 12,
+      color: '#94a3b8',
+      lineHeight: 1.6,
+    }}>
+      <span style={{ color: '#fbbf24', fontWeight: 600 }}>UDP/TCP mismatch</span>
+      {' '}— TCP:30303 reaches {nodes.join(', ')} but DiscV4 UDP times out.
+      {' '}This is ambiguous: it may mean (1) <strong style={{ color: '#cbd5e1' }}>your local firewall
+      (Windows Defender) is blocking incoming UDP responses</strong> on the ephemeral port used by
+      the probe, or (2) <strong style={{ color: '#cbd5e1' }}>your router or ISP is filtering
+      UDP on port 30303</strong>. In either case, an Ethereum execution node on this network
+      could connect to already-known peers via TCP but would fail at discovering new ones
+      through the discv4 protocol.
+    </div>
+  )
 }
 
 // --- Sub-components ---
@@ -371,7 +424,11 @@ function ResultsTable({ results }) {
                 <span style={S.kindTag}>{KIND_LABELS[r.kind] ?? r.kind}</span>
               </td>
               <td style={S.td}>{name}</td>
-              <td style={{ ...S.td, color: '#64748b', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>{host}</td>
+              <td style={S.td} title={host}>
+                <span style={{ display: 'inline-block', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom', color: '#64748b', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
+                  {host}
+                </span>
+              </td>
               <td style={S.tdRight}>
                 <span style={S.okBadge(r.summary.ok)}>{r.summary.ok ? 'OK' : 'FAIL'}</span>
               </td>
@@ -473,8 +530,9 @@ export default function App() {
 
           {/* Results */}
           {result !== null && (() => {
-            const rpcResults = result.report.results.filter(r => !P2P_KINDS.has(r.kind))
-            const p2pResults = result.report.results.filter(r => P2P_KINDS.has(r.kind))
+            const rpcResults    = result.report.results.filter(r => !P2P_KINDS.has(r.kind))
+            const execP2pResults = result.report.results.filter(r => EXEC_P2P_KINDS.has(r.kind))
+            const beaconResults  = result.report.results.filter(r => BEACON_KINDS.has(r.kind))
             return (
               <div>
                 <SendStatus send={result.send} />
@@ -490,16 +548,29 @@ export default function App() {
                 </div>
 
                 <div style={S.section}>
-                  <div style={S.sectionTitle}>Section 2 — Ethereum P2P network</div>
+                  <div style={S.sectionTitle}>Section 2 — Execution layer P2P</div>
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
-                    Tests whether the Ethereum P2P layer is reachable. Port 30303 is used by
-                    full nodes (RLPx + DiscV5). If TCP:30303 fails while TCP:443 works, it
-                    indicates selective protocol blocking. DNS Compare checks whether your local
+                    Tests the Ethereum execution layer P2P network. Port 30303 is used by
+                    execution nodes (RLPx + DiscV5). If TCP:30303 fails while TCP:443 works, it
+                    indicates selective port blocking. DNS Compare checks whether your local
                     resolver returns the same addresses as Cloudflare DoH (1.1.1.1) — a mismatch
                     or local-only failure may indicate DNS poisoning.
                   </p>
-                  <Summary results={p2pResults} />
-                  <ResultsTable results={p2pResults} />
+                  <Summary results={execP2pResults} />
+                  <ResultsTable results={execP2pResults} />
+                  <UdpTcpMismatchNote nodes={detectUdpTcpMismatch(execP2pResults)} />
+                </div>
+
+                <div style={S.section}>
+                  <div style={S.sectionTitle}>Section 3 — Consensus layer P2P (Beacon chain)</div>
+                  <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
+                    Tests the Ethereum consensus (Beacon chain) layer. DiscV5 (beacon) pings
+                    consensus boot nodes via UDP:9000 to verify peer discovery is reachable.
+                    Beacon API checks whether public beacon chain REST endpoints are accessible
+                    over HTTPS — the same data layer used by block explorers and staking dashboards.
+                  </p>
+                  <Summary results={beaconResults} />
+                  <ResultsTable results={beaconResults} />
                 </div>
               </div>
             )

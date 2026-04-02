@@ -51,8 +51,8 @@ impl super::ProbeFn for Discv5PingProbe {
         };
 
         let run = async {
-            discv5.start().await?;
-            let pong = discv5.send_ping(remote).await?;
+            discv5.start().await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            let pong = discv5.send_ping(remote).await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
             Ok::<_, anyhow::Error>(pong)
         };
 
