@@ -1,9 +1,43 @@
 services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       eth_probes
+      POSTGRES_USER:     eth_probes
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    # No "ports:" — the DB is internal only and never reachable from the host.
+    # To connect manually: docker compose exec postgres psql -U eth_probes eth_probes
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eth_probes -d eth_probes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   eth-prober-server:
     build: .
     ports:
       - "8080:8080"
     volumes:
-      - ./data:/app/data
       - ./geoip:/geoip:ro
+    environment:
+      DATABASE_URL: postgresql://eth_probes:${POSTGRES_PASSWORD}@postgres/eth_probes
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  pgdata:
