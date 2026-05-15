@@ -14,7 +14,7 @@
 /// Flow: send PING → expect PONG (packet-type 0x02 at offset 97).
 /// Some nodes do an "endpoint proof" (they send a PING back before PONGing us);
 /// this probe handles that by responding with a PONG before re-waiting.
-use crate::model;
+use crate::{model, rlp};
 use sha3::{Digest, Keccak256};
 
 const PACKET_PING: u8 = 0x01;
@@ -25,57 +25,6 @@ const HDR_LEN: usize = 98;
 pub struct Discv4PingProbe {
     pub host: String,
     pub port: u16,
-}
-
-// ---------------------------------------------------------------------------
-// Minimal RLP encoding (only what we need for ping/pong packets)
-// ---------------------------------------------------------------------------
-
-fn rlp_bytes(data: &[u8]) -> Vec<u8> {
-    if data.len() == 1 && data[0] < 0x80 {
-        vec![data[0]]
-    } else if data.len() <= 55 {
-        let mut out = vec![0x80 + data.len() as u8];
-        out.extend_from_slice(data);
-        out
-    } else {
-        let len_enc = be_bytes(data.len() as u64);
-        let mut out = vec![0xb7 + len_enc.len() as u8];
-        out.extend_from_slice(&len_enc);
-        out.extend_from_slice(data);
-        out
-    }
-}
-
-fn rlp_uint(n: u64) -> Vec<u8> {
-    if n == 0 {
-        vec![0x80]
-    } else {
-        let b = n.to_be_bytes();
-        let start = b.iter().position(|&x| x != 0).unwrap_or(7);
-        rlp_bytes(&b[start..])
-    }
-}
-
-fn rlp_list(items: &[Vec<u8>]) -> Vec<u8> {
-    let payload: Vec<u8> = items.iter().flat_map(|i| i.iter().copied()).collect();
-    if payload.len() <= 55 {
-        let mut out = vec![0xc0 + payload.len() as u8];
-        out.extend_from_slice(&payload);
-        out
-    } else {
-        let len_enc = be_bytes(payload.len() as u64);
-        let mut out = vec![0xf7 + len_enc.len() as u8];
-        out.extend_from_slice(&len_enc);
-        out.extend_from_slice(&payload);
-        out
-    }
-}
-
-fn be_bytes(n: u64) -> Vec<u8> {
-    let b = n.to_be_bytes();
-    let start = b.iter().position(|&x| x != 0).unwrap_or(7);
-    b[start..].to_vec()
 }
 
 fn keccak256(data: &[u8]) -> [u8; 32] {
@@ -124,19 +73,19 @@ fn build_ping(key: &k256::ecdsa::SigningKey, target_ip: [u8; 4], target_port: u1
         .as_secs()
         + 20;
 
-    let rlp_data = rlp_list(&[
-        rlp_uint(4), // version
-        rlp_list(&[
-            rlp_bytes(&[0u8, 0, 0, 0]),
-            rlp_uint(0),
-            rlp_uint(0),
+    let rlp_data = rlp::rlp_list(&[
+        rlp::rlp_uint(4), // version
+        rlp::rlp_list(&[
+            rlp::rlp_bytes(&[0u8, 0, 0, 0]),
+            rlp::rlp_uint(0),
+            rlp::rlp_uint(0),
         ]),
-        rlp_list(&[
-            rlp_bytes(&target_ip),
-            rlp_uint(target_port as u64),
-            rlp_uint(target_port as u64),
+        rlp::rlp_list(&[
+            rlp::rlp_bytes(&target_ip),
+            rlp::rlp_uint(target_port as u64),
+            rlp::rlp_uint(target_port as u64),
         ]),
-        rlp_uint(expiration),
+        rlp::rlp_uint(expiration),
     ]);
 
     sign_packet(key, PACKET_PING, &rlp_data)
@@ -149,14 +98,14 @@ fn build_pong(
     ping_hash: &[u8],
     expiration: u64,
 ) -> Vec<u8> {
-    let rlp_data = rlp_list(&[
-        rlp_list(&[
-            rlp_bytes(&to_ip),
-            rlp_uint(to_port as u64),
-            rlp_uint(to_port as u64),
+    let rlp_data = rlp::rlp_list(&[
+        rlp::rlp_list(&[
+            rlp::rlp_bytes(&to_ip),
+            rlp::rlp_uint(to_port as u64),
+            rlp::rlp_uint(to_port as u64),
         ]),
-        rlp_bytes(ping_hash),
-        rlp_uint(expiration),
+        rlp::rlp_bytes(ping_hash),
+        rlp::rlp_uint(expiration),
     ]);
     sign_packet(key, PACKET_PONG, &rlp_data)
 }

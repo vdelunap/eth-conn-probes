@@ -215,25 +215,36 @@ const S = {
 // --- Helpers ---
 
 const KIND_LABELS = {
-  dns_resolve:       'DNS',
-  tcp_connect:       'TCP',
-  http_control:      'HTTP-ctrl',
-  https_json_rpc:    'HTTPS RPC',
-  wss_json_rpc:      'WSS RPC',
+  // RPC provider availability
+  dns_resolve:          'DNS',
+  tcp_connect:          'TCP',
+  tls_handshake:        'TLS',
+  http_control:         'HTTP-ctrl',
+  https_json_rpc:       'HTTPS RPC',
+  https_json_rpc_write: 'HTTPS Write',
+  wss_json_rpc:         'WSS RPC',
+  wss_subscribe:        'WSS Subscribe',
   // Execution layer P2P
-  p2p_tcp_connect:   'P2P TCP',
-  discv4_ping:       'DiscV4 UDP',
-  dns_compare:       'DNS Compare',
-  discv5_ping:       'DiscV5 (exec)',
+  p2p_tcp_connect:      'P2P TCP',
+  discv4_ping:          'DiscV4 UDP',
+  dns_compare:          'DNS Compare',
+  discv5_ping:          'DiscV5 (exec)',
+  rlpx_handshake:       'RLPx Auth',
   // Consensus layer
-  beacon_discv5_ping: 'DiscV5 (beacon)',
-  beacon_https:       'Beacon API',
+  beacon_discv5_ping:   'DiscV5 (beacon)',
+  beacon_tcp_connect:   'Beacon TCP',
+  lib_p2p_handshake:    'libp2p',
+  beacon_https:         'Beacon API',
 }
 
 // Probe kinds that belong to the execution P2P section.
-const EXEC_P2P_KINDS = new Set(['p2p_tcp_connect', 'discv4_ping', 'dns_compare', 'discv5_ping'])
+const EXEC_P2P_KINDS = new Set([
+  'p2p_tcp_connect', 'discv4_ping', 'dns_compare', 'discv5_ping', 'rlpx_handshake',
+])
 // Probe kinds that belong to the consensus / beacon section.
-const BEACON_KINDS = new Set(['beacon_discv5_ping', 'beacon_https'])
+const BEACON_KINDS = new Set([
+  'beacon_discv5_ping', 'beacon_tcp_connect', 'lib_p2p_handshake', 'beacon_https',
+])
 // Combined for any P2P section (used to exclude from RPC section).
 const P2P_KINDS = new Set([...EXEC_P2P_KINDS, ...BEACON_KINDS])
 
@@ -542,6 +553,9 @@ export default function App() {
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
                     Tests whether public Ethereum RPC endpoints are reachable from your location.
                     This covers the access layer used by wallets (MetaMask, etc.) and dapps.
+                    Includes TLS handshake inspection, write-path censorship detection
+                    (HTTPS Write sends <code>eth_sendRawTransaction</code>), and WebSocket
+                    subscription availability.
                   </p>
                   <Summary results={rpcResults} durationStr={duration(result.report)} />
                   <ResultsTable results={rpcResults} />
@@ -551,10 +565,11 @@ export default function App() {
                   <div style={S.sectionTitle}>Section 2 — Execution layer P2P</div>
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
                     Tests the Ethereum execution layer P2P network. Port 30303 is used by
-                    execution nodes (RLPx + DiscV5). If TCP:30303 fails while TCP:443 works, it
-                    indicates selective port blocking. DNS Compare checks whether your local
-                    resolver returns the same addresses as Cloudflare DoH (1.1.1.1) — a mismatch
-                    or local-only failure may indicate DNS poisoning.
+                    execution nodes (RLPx + DiscV4). If TCP:30303 fails while TCP:443 works, it
+                    indicates selective port blocking. RLPx Auth sends an EIP-8 ECIES auth packet
+                    — a connection reset (RST) means the port is open but the node rejected our
+                    identity; a timeout means the port is blocked. DNS Compare checks whether your
+                    local resolver returns the same addresses as Cloudflare DoH (1.1.1.1).
                   </p>
                   <Summary results={execP2pResults} />
                   <ResultsTable results={execP2pResults} />
@@ -565,9 +580,11 @@ export default function App() {
                   <div style={S.sectionTitle}>Section 3 — Consensus layer P2P (Beacon chain)</div>
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
                     Tests the Ethereum consensus (Beacon chain) layer. DiscV5 (beacon) pings
-                    consensus boot nodes via UDP:9000 to verify peer discovery is reachable.
-                    Beacon API checks whether public beacon chain REST endpoints are accessible
-                    over HTTPS — the same data layer used by block explorers and staking dashboards.
+                    consensus boot nodes via UDP:9000. Beacon TCP and libp2p probes are derived
+                    from the same ENR entries, they test whether TCP:9000 is open and whether the
+                    node speaks the libp2p multistream-select protocol. A "connection refused" on
+                    TCP while DiscV5 UDP works means the inbound TCP port is firewalled. Beacon
+                    API checks public REST endpoints (<code>/eth/v1/node/version</code>).
                   </p>
                   <Summary results={beaconResults} />
                   <ResultsTable results={beaconResults} />

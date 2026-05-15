@@ -7,6 +7,7 @@ edition = "2021"
 default = []
 discv5 = ["dep:discv5"]
 discv4 = ["dep:k256", "dep:sha3", "dep:rand"]
+rlpx   = ["dep:k256", "dep:sha3", "dep:rand", "dep:aes", "dep:ctr", "dep:cipher", "dep:hmac", "dep:sha2"]
 
 [dependencies]
 anyhow = "1.0.100"
@@ -14,7 +15,7 @@ async-trait = "0.1.86"
 tracing = "0.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "time", "net"] }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
 reqwest = { version = "0.12.26", default-features = false, features = ["json", "rustls-tls"] }
 tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3.31"
@@ -23,10 +24,26 @@ uuid = { version = "1.20.0", features = ["v4"] }
 toml = "0.9.11"
 chrono = { version = "0.4", features = ["serde"] }
 
+# TLS handshake probe (always compiled — rustls is already a transitive dep via reqwest)
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+tokio-rustls = "0.26"
+webpki-roots = "0.26"
+x509-parser = "0.16"
+
+# Optional — discv5 feature
 discv5 = { version = "0.10.2", optional = true }
-k256   = { version = "0.13", features = ["ecdsa"], optional = true }
-sha3   = { version = "0.10", optional = true }
-rand   = { version = "0.8", optional = true }
+
+# Optional — discv4 + rlpx features (shared secp256k1, keccak, rand)
+k256 = { version = "0.13", features = ["ecdsa", "ecdh"], optional = true }
+sha3 = { version = "0.10", optional = true }
+rand = { version = "0.8", optional = true }
+
+# Optional — rlpx feature only (ECIES: AES-128-CTR + HMAC-SHA256)
+aes    = { version = "0.8", optional = true }
+ctr    = { version = "0.9", optional = true }
+cipher = { version = "0.4", optional = true }
+hmac   = { version = "0.12", optional = true }
+sha2   = { version = "0.10", optional = true }
 
 [dev-dependencies]
 mockito = "1.7.1"

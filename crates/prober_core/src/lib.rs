@@ -3,9 +3,15 @@ use anyhow::Context;
 pub mod config;
 pub mod model;
 pub mod probes;
+pub mod rlp;
 pub mod reporting;
 
 pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
+    // When both ring and aws-lc-rs are compiled in (reqwest pulls aws-lc-rs),
+    // rustls::ClientConfig::builder() panics without an explicit default provider.
+    // install_default() is a no-op if already set, so it's safe to call on every run.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let started_at_ms = model::now_ms();
     let run_id = uuid::Uuid::new_v4().to_string();
 
