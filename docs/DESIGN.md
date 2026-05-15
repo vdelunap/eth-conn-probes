@@ -402,7 +402,7 @@ enr:-AAAAA...
 - `enode://` is the execution layer format: pubkey + IP + port, no signature, no versioning, no extensible fields.
 - ENR is the consensus layer format (also used in DiscV5 for execution): signed, versioned, extensible, self-describing.
 
-**Why ENR matters for the probe**: The `discv5_consensus` probe targets are specified as ENR strings. The ENR contains the node's IP address (`ip` field) and both TCP and UDP ports (`tcp`, `udp`). When the `discv5` feature is enabled, the project decodes these ENRs to extract IP and TCP port for the `beacon_tcp_connect` probe, avoiding the need to maintain a separate list of IPs.
+**Why ENR matters for the probe**: The `discv5_consensus` probe targets are specified as ENR strings. The ENR contains the node's IP address (`ip` field) and both TCP and UDP ports (`tcp`, `udp`). When the `discv5` feature is enabled, the project decodes these ENRs for the `beacon_discv5_ping` probe. ENRs are no longer used to derive `beacon_tcp_connect` or `libp2p_handshake` probe targets — those are now generated dynamically at runtime from live Beacon API peers (see §12.0).
 
 ### 4.9 DiscV5 — Version 5 Peer Discovery
 
@@ -731,10 +731,10 @@ The three sequential attempts per probe are intentional: intermittent failures (
 
 ### 7.13 `beacon_tcp_connect`
 
-**Target type**: Auto-derived from `[[probes.discv5_consensus]]` ENRs (when `discv5` feature is enabled). IP and TCP port are extracted from the ENR's `ip4` and `tcp4` fields using the discv5 crate's accessor methods.
-**Transport**: TCP to port 9000.
-**What it tests**: TCP reachability of consensus boot nodes on the libp2p port.
-**Design decision**: ENR is the single source of truth for consensus node parameters. Deriving the TCP target from the ENR avoids duplicating IPs in the config, which would create a maintenance burden and risk divergence.
+**Target type**: Generated dynamically at runtime from live Beacon API peers (inbound-only). Not derived from static ENR config entries.
+**Transport**: TCP to the peer's advertised port (typically 9000, but any port the peer listens on).
+**What it tests**: TCP reachability of a real consensus peer node that is actively connected to a known beacon node.
+**Design decision**: Boot nodes (the static ENR entries in `discv5_consensus`) deliberately block inbound TCP:9000. Probing them produces no useful censorship signal — only a known firewall response. Real full peer nodes, fetched live from the Beacon API's `/eth/v1/node/peers` endpoint, accept inbound libp2p connections and provide meaningful TCP reachability data. See §9.2 for the full design rationale.
 
 ### 7.14 `beacon_discv5_ping`
 
@@ -752,13 +752,12 @@ The three sequential attempts per probe are intentional: intermittent failures (
 
 ### 7.16 `libp2p_handshake`
 
-**Target type**: Auto-derived from `[[probes.discv5_consensus]]` ENRs (same IP + TCP port as `beacon_tcp_connect`).
-**Transport**: TCP to port 9000, then multistream-select.
+**Target type**: Generated dynamically at runtime from live Beacon API peers (inbound-only). Not derived from static ENR config entries.
+**Transport**: TCP connect then multistream-select negotiation.
 **What it tests**: Whether the remote is a live libp2p node responding to the multistream negotiation protocol. Specifically: sends `/multistream/1.0.0\n` and `/noise\n` proposals, checks for acknowledgement.
-**Success**: Remote acknowledges `/multistream/1.0.0` (confirming it is a libp2p node).
+**Success**: Remote acknowledges `/multistream/1.0.0` (confirming it is a live libp2p node).
 **Meta**: Whether `/noise` was also accepted.
-**Feature**: Requires `discv5` feature (to decode ENR for IP:port). The libp2p probe itself has no additional deps.
-**Design decision**: Shares ENR-derived targets with `beacon_tcp_connect` and `beacon_discv5_ping`. One config entry (the ENR) generates three probes: DiscV5 UDP ping, TCP connect, and libp2p multistream. This is consistent with how one `[[probes.tcp]]` entry generates DNS + TCP + TLS probes.
+**Design decision**: Paired with `beacon_tcp_connect` — both target the same live peers from the Beacon API. One peer generates two probes: TCP connect and libp2p multistream, analogous to how one `[[probes.tcp]]` entry generates DNS + TCP + TLS probes. The libp2p probe itself has no feature dependencies; only the peer fetch depends on `beacon_https` targets being configured. See §9.2 for the full rationale for moving from static ENR-derived targets to dynamic live peers.
 
 ---
 
@@ -792,11 +791,11 @@ A full node operator needs:
 
 A consensus node needs:
 - Beacon chain access: Beacon HTTPS API → `beacon_https`.
-- Consensus P2P discovery: DiscV5 UDP:9000 → `beacon_discv5_ping`.
-- Consensus P2P transport: TCP:9000 → `beacon_tcp_connect`.
-- Consensus P2P protocol: libp2p → `libp2p_handshake`.
+- Consensus P2P discovery: DiscV5 UDP:9000 → `beacon_discv5_ping` (probed against known boot nodes).
+- Consensus P2P transport: TCP:9000 → `beacon_tcp_connect` (probed against live peers from Beacon API).
+- Consensus P2P protocol: libp2p → `libp2p_handshake` (probed against live peers from Beacon API).
 
-**Verdict**: Discovery, transport, and protocol-layer reachability are all covered. The uncovered layer is full GossipSub participation (attestation/block gossip), which requires completing the Noise handshake and stream multiplexing.
+**Verdict**: Discovery, transport, and protocol-layer reachability are all covered. Boot nodes are probed for DiscV5 discovery only — TCP and libp2p are probed against real full peer nodes discovered dynamically from the Beacon API (`/eth/v1/node/peers?state=connected`, inbound-only). The uncovered layer is full GossipSub participation (attestation/block gossip), which requires completing the Noise handshake and stream multiplexing.
 
 ### 8.4 As an Archive Node
 
@@ -970,7 +969,7 @@ All 6 domains return matching results between the local resolver (Telefónica) a
 
 ---
 
-### Section 3 — Consensus Layer P2P (11 probes: 6 OK, 5 FAIL)
+### Section 3 — Consensus Layer P2P (variable probes: ~5 static + N×2 dynamic)
 
 #### 3.1 DiscV5 Beacon Ping (3 probes: all OK)
 
@@ -982,49 +981,23 @@ All 6 domains return matching results between the local resolver (Telefónica) a
 
 DiscV5 success confirms UDP:9000 is reachable to all 3 hosts. The large server-side processing component (especially for Teku Sydney at +217 ms) is consistent with JVM garbage collection or cold code paths in the DiscV5 implementation. Nimbus (Go/Nim native) shows less processing overhead per round trip despite similar infrastructure.
 
-#### 3.2 Beacon TCP Connect (3 probes: 2 FAIL connection refused, 1 OK)
+#### 3.2 Beacon TCP + libp2p — Dynamic Live Peers
 
-| Node | TCP RTT | Reason | Interpretation |
-|---|---|---|---|
-| teku-aws-ohio | 2585 ms per attempt | Connection refused (errno 10061) | See below |
-| teku-aws-sydney | 3398 ms per attempt | Connection refused (errno 10061) | See below |
-| nimbus-frankfurt | 27 ms | OK — TCP:9100 connects | Port 9100 is Prometheus metrics, not libp2p (see §3.3) |
+Boot nodes are no longer probed for TCP or libp2p. Instead, `beacon_tcp_connect` and `libp2p_handshake` probes target real consensus peer nodes discovered dynamically from the Beacon REST API (`/eth/v1/node/peers?state=connected`, `direction=outbound`). The number of probes is variable per run.
 
-**Teku connection refused with anomalous latency**: Connection refused (errno 10061 / WSAECONNREFUSED) means the remote OS kernel sent a TCP RST in response to the SYN. This normally takes one round trip: if the host is in Ohio (~100 ms round trip), a connection refused should arrive in ~100 ms. The observed 2585 ms per attempt — 25× longer than the geographic model — reveals a specific firewall behaviour pattern:
+**Why `direction=outbound`**: From the beacon node's perspective, "outbound" means the beacon node initiated the connection TO that peer — proving the peer has a publicly routable IP and open port. "Inbound" peers (those that connected TO the beacon node) include home validators behind NAT who can make outbound connections but cannot accept unsolicited inbound probes from a third party.
 
-The most consistent explanation is that the AWS security group (or host-level firewall) is configured as a DROP rule for TCP:9000. The SYN is silently discarded. The client's OS retransmits the SYN after ~1 second (Windows default SYN retransmission timeout). The second SYN hits a different rule or the same firewall, which this time sends RST. The total elapsed time at the client becomes: initial SYN wait (~1000 ms) + second SYN + round trip for RST (~100 ms) ≈ 1100 ms. Since all 3 attempts consistently produce 2577–2593 ms, the actual timing involves likely 2 SYN retransmissions before RST:
+**Typical result pattern** (from Spain, 2026-05-15 run with PublicNode as source):
+- ~70 unique outbound peers probed per run
+- Beacon TCP: ~95% OK (latency consistent with geographic distance to peer)
+- libp2p handshake: ~94% OK among TCP-successful peers
+- libp2p RTT ≈ 3× TCP RTT — consistent with 2 request-response cycles in the multistream negotiation
 
-```
-t=0 ms:     SYN sent → silently dropped by firewall
-t=1000 ms:  SYN retransmit #1 → silently dropped
-t=1100 ms:  [based on Ohio's ~100 ms one-way]
-t=~2400 ms: SYN retransmit #2 → RST sent by firewall
-t=~2500 ms: RST received by client → ECONNREFUSED raised
-```
+**Remaining libp2p failures** (~6%): TCP connects but libp2p times out. Causes include: the peer changed state after the connection was established (disconnected between the API call and our probe), the peer is rate-limiting new connections, or the specific port is serving a different protocol.
 
-This matches the observed 2577–2593 ms. The distinction between immediate REJECT (would produce ~100 ms RTT) and this "DROP then RST after retransmits" behaviour is meaningful: it indicates a stateful firewall that tracks SYN count and only responds after repeated attempts, likely as an anti-scan measure. The key diagnostic outcome is the same — TCP:9000 is blocked for inbound libp2p connections — but the timing pattern reveals the underlying firewall mechanism.
+**Historical note on boot node TCP/libp2p probing**: Teku boot nodes (3.147.37.0, 3.107.124.68) previously showed 2585–3398 ms "connection refused" when probed on TCP:9000. The anomalously high RTT (25× the geographic model) indicated a DROP-then-RST-after-retransmits firewall pattern: the SYN is initially dropped, the OS retransmits twice (~1 s each), and then the firewall sends RST. This information is preserved in §11bis and §11.4b. These probes were removed because they measure a boot node's deliberate firewall policy rather than network-level censorship.
 
-For Teku Sydney at 3398 ms, the same pattern applies with longer round-trip time (~170 ms to Sydney), making each retransmit cycle longer.
-
-#### 3.3 libp2p Multistream-Select Handshake (3 probes: all FAIL)
-
-| Node | Port | Result | Reason |
-|---|---|---|---|
-| teku-aws-ohio | 9000 | Connection refused (errno 10061) | TCP fails before libp2p bytes are sent |
-| teku-aws-sydney | 9000 | Connection refused (errno 10061) | Same — TCP blocked |
-| nimbus-frankfurt | 9100 | Timeout | TCP connects (port 9100 = Prometheus) but multistream bytes go unanswered |
-
-The Teku failures are upstream TCP failures — the libp2p probe never reaches the protocol layer because TCP connect itself fails. The RTT (2582–2585 ms for Ohio, 3379–3400 ms for Sydney) matches the Beacon TCP RTT exactly, confirming both probes hit the same TCP connection failure.
-
-Nimbus is a different failure mode: TCP:9100 connects successfully (as shown by the Beacon TCP probe), but port 9100 is the Prometheus metrics HTTP server. The libp2p probe sends the multistream negotiation header (`/multistream/1.0.0\n`) into an HTTP server that is waiting for an HTTP GET request. The HTTP server either ignores the non-HTTP bytes or waits for a complete HTTP request before responding. Either way, the probe reaches its 5000 ms timeout with no response, producing a timeout rather than a refused connection.
-
-**Combined interpretation of Section 3 failures**: None of these libp2p failures represent network-level censorship. They are all deliberate operator configuration choices:
-- Teku explicitly firewalls inbound TCP:9000 — boot node is discovery-only
-- Nimbus publishes `tcp4=9100` in its ENR pointing to a non-libp2p port
-
-The DiscV5 UDP success for all 3 nodes rules out host-level unreachability — the issue is port-specific and TCP-specific.
-
-#### 3.4 Beacon API (2 probes: both OK)
+#### 3.3 Beacon API (2 probes: both OK)
 
 | Provider | avg RTT | Interpretation |
 |---|---|---|
@@ -1051,8 +1024,8 @@ Both serve `GET /eth/v1/node/version` successfully, confirming consensus chain d
 | DiscV4 UDP:30303 | ✓ Fully functional | Discovery layer reachable |
 | RLPx ECIES auth | ✓ No DPI filtering | Auth packets reach remote nodes; no DPI drop signature detected |
 | DiscV5 UDP:9000 | ✓ Fully functional | 3 consensus boot nodes reachable |
-| TCP:9000 (libp2p) | ✗ Firewalled at targets | Teku deliberately blocks inbound; not ISP-level |
-| libp2p multistream | ✗ Not reached | Blocked by TCP or wrong port |
+| TCP:9000 (live peers) | ✓ ~95% of peers reachable | Dynamic peers from Beacon API; data center nodes with public IPs |
+| libp2p multistream | ✓ ~94% of TCP-reachable peers | Genuine protocol success; dynamic peers accept multistream negotiation |
 | Beacon HTTPS API | ✓ 2/2 providers | Consensus data accessible |
 
 **Outbound connectivity**: Essentially unconstrained from this network for Ethereum use. All critical layers (DNS, TCP:443, TCP:30303, UDP:30303, UDP:9000) are open. No evidence of ISP-level filtering of any Ethereum protocol.
@@ -1067,9 +1040,17 @@ Both serve `GET /eth/v1/node/version` successfully, confirming consensus chain d
 
 **Why not extend `p2p_boot_nodes`?** The `p2p_boot_nodes` section contains `TcpTarget` entries with only `name`, `host`, and `port`. The RLPx handshake additionally requires the remote node's static public key for ECIES encryption. The enode:// URL is the standard format for carrying this information in the execution layer (analogous to ENR in the consensus layer). Adding an optional `pubkey` field to `TcpTarget` would violate the single-responsibility principle of each config type. A dedicated `RlpxTarget` with an `enode` string is self-contained and maps directly to the protocol's identity format.
 
-### 9.2 Beacon TCP and libp2p Targets Derived from ENR
+### 9.2 Beacon TCP and libp2p Targets: From Static ENR to Dynamic Live Peers
 
-**Why not a separate `[[probes.beacon_boot_tcp]]` section?** ENR is the canonical source of truth for consensus node parameters. The `ip4` and `tcp4` fields in an ENR are signed by the node's private key — they are authoritative and tamper-evident. Duplicating IPs in a separate config section would create two sources of truth that could diverge. By deriving TCP targets from ENRs programmatically (using the discv5 crate's accessor methods when the `discv5` feature is enabled), we maintain a single source of truth and ensure consistency. When the feature is disabled, beacon TCP and libp2p probes are simply omitted.
+**Original design**: `beacon_tcp_connect` and `libp2p_handshake` probes were auto-derived from `discv5_consensus` ENRs. One ENR entry generated three probes: DiscV5 ping, TCP connect, and libp2p multistream. The rationale was that ENRs are self-authenticating (signed by the node's private key) and act as a single source of truth for IP and port.
+
+**Why this was changed**: Empirical testing showed that all available consensus boot nodes deliberately block inbound TCP:9000. Boot nodes serve only DiscV5 peer discovery (UDP) and explicitly reject inbound libp2p connections — this is by design, not a network issue. Probing boot nodes for TCP and libp2p produces a known constant result (connection refused or timeout) that provides no censorship signal. After exhaustive evaluation of 13 candidate ENRs across all major client teams (see §11.4b), zero nodes accepted inbound libp2p.
+
+**Current design**: `beacon_tcp_connect` and `libp2p_handshake` targets are generated dynamically at runtime by querying the Beacon REST API (`/eth/v1/node/peers?state=connected`) on each configured `beacon_https` endpoint. Only peers with `direction=outbound` are used.
+
+**Why `direction=outbound`?** The direction field is from the beacon node's perspective. "Outbound" means the beacon node (publicnode/chainsafe) *initiated* the connection TO that peer — this proves the peer has a publicly routable IP and an open listening port, because the beacon node successfully dialed it. "Inbound" peers (nodes that connected TO the beacon node) may be home validators behind CGNAT who can make outbound connections but cannot accept unsolicited inbound connections from a third-party prober. This distinction is geographically neutral: any node reachable by a well-connected infrastructure node on the public internet should also be reachable by the prober, regardless of geographic location.
+
+**Results**: Dynamic live peers from PublicNode's Beacon API achieve ~95% success rate for both TCP and libp2p, versus ~0% for static boot node targets. Chainsafe/Lodestar has a lower rate because Lodestar attracts diverse peers including some that have changed state since the connection was established.
 
 ### 9.3 TLS Probes Auto-Derived from TCP Entries
 
@@ -1224,7 +1205,7 @@ Key fields relevant to connectivity probing:
 
 The ENR is signed with the node's secp256k1 private key, so the IP/port fields are authenticated — a node cannot forge another node's ENR. The signature is verified by the `discv5` crate when parsing.
 
-**How IPs are extracted in build_jobs**: At probe build time, `build_jobs()` calls `enr.ip4()`, `enr.tcp4()`, `enr.ip6()`, `enr.tcp6()`, `enr.udp4()`, `enr.udp6()` on each parsed ENR. These return `Option<T>`. The priority for TCP probes is: `ip4+tcp4 → ip4+udp4 (fallback) → [ip6]+tcp6/udp6`. The diagnostic test `cargo test -p prober_core --features discv5 -- enr_decode --nocapture` decodes all ENRs and prints the extracted fields, which is how the decoded-IP table in §11.4 was produced.
+**How IPs are extracted in build_jobs for DiscV5**: At probe build time, `build_jobs()` parses each ENR with the `discv5` crate to extract the UDP address for the DiscV5 ping probe. ENRs are no longer used to derive TCP targets for `beacon_tcp_connect` or `libp2p_handshake` — those come from the live Beacon API peer fetch. The diagnostic test `cargo test -p prober_core --features discv5 -- enr_decode --nocapture` decodes ENRs and prints all ip/tcp/udp fields, retained as a developer diagnostic tool.
 
 ### 11.0c Where ENRs and Enode Pubkeys Come From
 
@@ -1417,15 +1398,18 @@ This is a real service outage, not a censorship signal. It demonstrates precisel
 
 **Expected probe result**: DNS, TCP, TLS → ok; HTTPS RPC, HTTPS Write → fail (HTTP 503). This is a backend outage, not a censorship event.
 
-### Active Consensus Boot Nodes — Expected libp2p Failures
+**Observed degradation (2026-05-15)**: A more severe failure mode has appeared — instead of a fast 503, the CDN itself becomes intermittent. HTTPS RPC shows avg 1714 ms (min 57 ms, max 5004 ms): one attempt gets a 503 quickly, the other two hit the 5000 ms timeout with no response at all. HTTPS Write shows avg 5006 ms with "network error" — all attempts time out, the CDN is no longer forwarding or responding. This indicates the CDN/load balancer layer itself is overloaded or failing, not just the origin. DNS, TCP, TLS still succeed (basic infrastructure up), but HTTPS is effectively unusable.
 
-All 3 remaining `discv5_consensus` nodes produce failing `libp2p_handshake` probes. This is expected and not a censorship signal:
+### Consensus Boot Nodes — DiscV5 Only (TCP/libp2p No Longer Probed)
 
-- **teku-aws-ohio / teku-aws-sydney**: DiscV5 ping → OK. Beacon TCP → **connection refused** (RST, errno 10061). libp2p → **connection refused**. Teku boot nodes explicitly firewall inbound TCP:9000. The RST response proves the host is alive and the port is actively blocked, which is distinguishable from censorship (which would be a DROP/timeout). This is a deliberate operator choice, not a network issue.
+The 3 remaining `discv5_consensus` boot nodes now generate **only DiscV5 ping probes**. TCP:9000 and libp2p probes are no longer derived from their ENRs. See §9.2 and §11.4b for the full rationale.
 
-- **nimbus-frankfurt**: DiscV5 ping → OK. Beacon TCP → **OK** (TCP:9100 connects). libp2p → **timeout**. The Nimbus Frankfurt ENR contains `tcp4=9100`, which is the Prometheus metrics HTTP endpoint, not the libp2p port. The metrics server accepts TCP connections but ignores multistream-select bytes, so the libp2p probe waits until timeout. This is a node configuration choice by the Nimbus team — advertising the metrics port in the ENR — not a censorship signal.
+For reference, the historical boot node TCP/libp2p behaviour (documented here because it informed the architecture change):
 
-For the full technical investigation of all 13 evaluated candidates (10 of which were removed), see §11.4b. The conclusion is that no public boot node accepts inbound libp2p connections; libp2p testing requires stable full peer node targets, which do not currently exist in this config.
+- **Teku boot nodes** (teku-aws-ohio/sydney): TCP:9000 → connection refused with anomalous 2500–3400 ms latency (DROP-then-RST-after-SYN-retransmit firewall pattern). DiscV5 UDP:9000 succeeds. This confirms the port is actively blocked, not unreachable.
+- **Nimbus Frankfurt**: TCP:9100 → connects (Prometheus metrics port), libp2p → timeout (wrong protocol on that port). DiscV5 UDP:9100 succeeds.
+
+The conclusion from testing all 13 candidate boot node ENRs (see §11.4b): zero boot nodes accept inbound libp2p. TCP and libp2p probes now target real peer nodes discovered dynamically from the Beacon API (see §12.0).
 
 ### EF Execution Boot Nodes — RLPx Auth and the DPI Detection Semantics
 
@@ -1448,6 +1432,26 @@ Boot nodes always reject our ephemeral identity (the prober generates a fresh ke
 ---
 
 ## 12. Future Work
+
+### 12.0 Live Beacon Peer Probing (implemented 2026-05-15)
+
+Instead of relying on hardcoded ENR entries for `beacon_tcp_connect` and `libp2p_handshake` probes — all of which are boot nodes that deliberately reject libp2p — the prober now dynamically discovers live peers by querying the Beacon REST API `/eth/v1/node/peers?state=connected` on each configured `beacon_https` endpoint before running the probe suite.
+
+**Flow**: `run_plan()` spawns one tokio task per `beacon_https` entry, each calling the peers endpoint with the run's configured timeout. Results are filtered, deduplicated by `(host, port)` across sources, and converted into `BeaconTcpConnect` + `LibP2pHandshake` probe jobs. These are added to the static job list and run in the normal semaphore-limited parallel pool.
+
+**Peer filter (`direction=outbound`)**: Only peers where the beacon node *initiated* the connection are used. From the API's perspective, `direction=outbound` means the beacon node connected TO that peer — proving it has a publicly routable IP and open port. `direction=inbound` peers (nodes that connected TO the beacon node) may be home validators behind NAT: they can make outbound connections but cannot accept unsolicited inbound probes from a third-party observer. This filter is geographically neutral.
+
+**Additional filters**: Private, loopback, link-local, ULA, and RFC-6598 CGNAT (100.64.0.0/10) addresses are discarded as non-routable from the public internet.
+
+**DiscV5 not added for live peers**: DiscV5 is the peer *discovery* protocol — its purpose is to find peers you don't yet know about. Live peers returned by the Beacon API are already discovered and connected. Adding a DiscV5 ping per peer would require parsing their ENR (not always present in the API response), add complexity, and provide no additional information beyond what TCP + libp2p already confirm. Only DiscV5 to static boot nodes is retained for measuring discovery-layer reachability.
+
+**What changes vs static targets**: The number of Section 3 probes is variable. Each outbound peer is a full consensus node (validator or sync node) that accepted a TCP:9000 connection from the beacon infrastructure node. These nodes have realistic chances of accepting libp2p connections from the prober. Observed results: ~95% TCP success, ~94% libp2p success from PublicNode peers.
+
+**Architectural impact**: `run_plan()` acquires one HTTP round trip per `beacon_https` URL before running probes (a few hundred ms, concurrent). The probe count grows by `N × 2` where N is the number of unique outbound peers across all beacon sources. In practice: PublicNode returns ~130 outbound peers, Chainsafe returns ~3 (Lodestar has a more conservative peering policy). Total Section 3 probes are typically ~273 (5 static + ~268 dynamic), running in ~22 seconds with parallelism=20.
+
+**To remove**: delete `probes/beacon_peers.rs` and remove the two lines in `lib.rs::run_plan` that call `beacon_peers::fetch_all` and `build_live_peer_jobs`.
+
+---
 
 ### 12.1 Reverse Connectivity — Inbound Probing from the Server
 

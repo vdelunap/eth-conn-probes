@@ -22,7 +22,13 @@ pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
         app_channel: cfg.client.app_channel.clone(),
     };
 
-    let jobs = probes::build_jobs(&cfg).context("build_jobs")?;
+    let mut jobs = probes::build_jobs(&cfg).context("build_jobs")?;
+
+    // Fetch live connected peers from Beacon API endpoints and add TCP + libp2p probes.
+    // Remove the next two lines (and beacon_peers module) to disable this feature.
+    let live_peers = probes::beacon_peers::fetch_all(&cfg, cfg.run.timeout_ms).await;
+    jobs.extend(probes::build_live_peer_jobs(live_peers));
+
     let results = probes::run_jobs(&cfg.run, jobs).await;
 
     let finished_at_ms = model::now_ms();

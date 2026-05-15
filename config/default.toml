@@ -233,11 +233,10 @@ host = "157.90.35.166"
 port = 30303
 
 # ---------------------------------------------------------------------------
-# DiscV5 consensus — ping consensus boot nodes via DiscV5 v5.
-# Consensus nodes publish ENRs with enr:- format, unlike execution nodes
-# which use enode:// (devp2p v4) and cannot be reached by DiscV5 v5.
-# ENRs with tcp4 also generate Beacon TCP + libp2p handshake probes.
-# ENRs without tcp4 fall back to the udp4 port for TCP probes.
+# DiscV5 consensus — ping consensus boot nodes via DiscV5 v5 (UDP:9000).
+# These ENRs generate ONLY DiscV5 ping probes. BeaconTcpConnect and
+# LibP2pHandshake are generated dynamically from live Beacon API peers
+# at runtime (beacon_peers::fetch_all). See DESIGN.md §11.4 and §12.0.
 # ---------------------------------------------------------------------------
 
 # Teku (ConsenSys) — tcp4=9000 advertised; TCP:9000 firewalled (discovery-only boot nodes).
