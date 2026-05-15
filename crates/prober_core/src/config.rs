@@ -266,9 +266,10 @@ pub fn default_config() -> Config {
 
             // ---- Section 3: Ethereum consensus layer (Beacon chain) ----
 
-            // ENR strings published by client teams in their official repositories.
-            // Only 3 nodes remain after empirical testing — see DESIGN.md §11.4b for the
-            // detailed technical rationale for all nodes that were evaluated and removed.
+            // ENR strings for consensus boot nodes used exclusively for DiscV5 UDP ping probes.
+            // BeaconTcpConnect and LibP2pHandshake are NOT generated from these ENRs.
+            // Those probes are generated dynamically at runtime from live Beacon API peers
+            // (beacon_peers::fetch_all). See DESIGN.md §11.4 and §12.0.
             discv5_consensus: vec![
                 // Teku (ConsenSys) — tcp4=9000 advertised; TCP:9000 is firewalled (discovery-only).
                 Discv5Target { name: "teku-aws-ohio".into(),

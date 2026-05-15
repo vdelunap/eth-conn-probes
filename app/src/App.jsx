@@ -580,11 +580,12 @@ export default function App() {
                   <div style={S.sectionTitle}>Section 3 — Consensus layer P2P (Beacon chain)</div>
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
                     Tests the Ethereum consensus (Beacon chain) layer. DiscV5 (beacon) pings
-                    consensus boot nodes via UDP:9000. Beacon TCP and libp2p probes are derived
-                    from the same ENR entries, they test whether TCP:9000 is open and whether the
-                    node speaks the libp2p multistream-select protocol. A "connection refused" on
-                    TCP while DiscV5 UDP works means the inbound TCP port is firewalled. Beacon
-                    API checks public REST endpoints (<code>/eth/v1/node/version</code>).
+                    consensus boot nodes via UDP:9000. Beacon TCP and libp2p probes target live
+                    peer nodes fetched dynamically from the Beacon REST API
+                    (<code>/eth/v1/node/peers</code>, outbound connections only) — these are real
+                    full peer nodes that have already accepted a connection from a beacon
+                    infrastructure node, so they have publicly routable addresses. Beacon API
+                    checks public REST endpoints (<code>/eth/v1/node/version</code>).
                   </p>
                   <Summary results={beaconResults} />
                   <ResultsTable results={beaconResults} />
