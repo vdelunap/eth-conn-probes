@@ -39,32 +39,36 @@ pub struct ProbesConfig {
     pub tcp: Vec<TcpTarget>,
     pub https_jsonrpc: Vec<JsonRpcTarget>,
     pub wss_jsonrpc: Vec<JsonRpcTarget>,
-    /// DiscV5 pings to execution layer boot nodes (ENR format, port 30303).
-    /// Execution boot nodes advertise themselves via enode:// (devp2p v4), not enr:-.
-    /// This list is therefore intentionally empty unless you have ENRs for execution nodes.
-    #[serde(default)]
-    pub discv5_execution: Vec<Discv5Target>,
+
+    // --- Execution layer P2P ---
+
     /// TCP connect probes to Ethereum execution boot nodes on port 30303.
-    /// These test whether the RLPx/DiscV5 protocol port is reachable.
     #[serde(default)]
     pub p2p_boot_nodes: Vec<TcpTarget>,
     /// DiscV4 UDP ping probes to Ethereum execution boot nodes on port 30303.
-    /// Tests whether the execution-layer peer discovery protocol (devp2p discv4) is reachable.
     #[serde(default)]
     pub discv4_execution: Vec<TcpTarget>,
-    /// DNS comparison probes: resolves each host with both the system resolver
-    /// and Cloudflare DoH (1.1.1.1) to detect DNS blocking or poisoning.
+    /// DiscV5 pings to execution layer boot nodes (ENR format, port 30303).
+    /// Intentionally empty in default config — execution nodes use enode://, not enr:-.
+    #[serde(default)]
+    pub discv5_execution: Vec<Discv5Target>,
+    /// RLPx ECIES auth handshake targets. Requires enode:// URL (contains the remote's
+    /// secp256k1 public key needed for ECIES encryption of the auth message).
+    /// Separate from p2p_boot_nodes because enode:// carries the pubkey; TcpTarget does not.
+    #[serde(default)]
+    pub rlpx_targets: Vec<RlpxTarget>,
+    /// DNS comparison probes: resolves each host with system resolver + Cloudflare DoH.
     #[serde(default)]
     pub dns_compare: Vec<DnsCompareTarget>,
 
     // --- Consensus layer (Beacon chain) ---
 
     /// DiscV5 pings to consensus boot nodes (ENR format, port 9000).
-    /// Consensus nodes use enr:- format, making DiscV5 v5 pings viable here.
+    /// When the discv5 feature is enabled, ip4/tcp4 fields are also extracted from
+    /// these ENRs to generate beacon_tcp_connect and libp2p_handshake probes.
     #[serde(default)]
     pub discv5_consensus: Vec<Discv5Target>,
     /// HTTP GET probes to public beacon chain REST API endpoints.
-    /// Hits /eth/v1/node/version to verify consensus data is accessible over HTTPS.
     #[serde(default)]
     pub beacon_https: Vec<BeaconHttpsTarget>,
 }
@@ -96,6 +100,16 @@ pub struct Discv5Target {
     pub enr: String,
 }
 
+/// RLPx handshake target. The enode:// URL encodes the remote's secp256k1 public key
+/// (needed for ECIES), IP address, and TCP port — all in one self-describing string.
+/// Source: go-ethereum params/bootnodes.go (Ethereum Foundation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RlpxTarget {
+    pub name: String,
+    /// Full enode URL: enode://PUBKEY_HEX@IP:PORT
+    pub enode: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsCompareTarget {
     pub name: String,
@@ -120,11 +134,7 @@ impl Config {
 }
 
 /// Returns the hardcoded default configuration used by the desktop app.
-///
-/// The reporting URL points to the self-hosted server on DigitalOcean.
-/// TODO: replace 146.146.146.146 with the real server IP once deployed.
 pub fn default_config() -> Config {
-    // Helper closures to reduce repetition when building target lists.
     let tcp = |name: &str, host: &str| TcpTarget {
         name: name.to_string(),
         host: host.to_string(),
@@ -148,6 +158,10 @@ pub fn default_config() -> Config {
     let dns_cmp = |name: &str, host: &str| DnsCompareTarget {
         name: name.to_string(),
         host: host.to_string(),
+    };
+    let rlpx = |name: &str, enode: &str| RlpxTarget {
+        name: name.to_string(),
+        enode: enode.to_string(),
     };
 
     Config {
@@ -175,7 +189,7 @@ pub fn default_config() -> Config {
             },
 
             // ---- Section 1: RPC provider availability ----
-            // Each TCP entry also auto-generates a DNS resolve probe.
+            // Each TCP entry auto-generates: dns_resolve + tcp_connect + tls_handshake probes.
 
             tcp: vec![
                 tcp("publicnode",  "ethereum-rpc.publicnode.com"),
@@ -188,6 +202,7 @@ pub fn default_config() -> Config {
                 tcp("blast",       "eth-mainnet.public.blastapi.io"),
             ],
 
+            // Each https_jsonrpc entry auto-generates: https_json_rpc + https_json_rpc_write probes.
             https_jsonrpc: vec![
                 https("publicnode", "https://ethereum-rpc.publicnode.com"),
                 https("cloudflare", "https://cloudflare-eth.com"),
@@ -199,37 +214,47 @@ pub fn default_config() -> Config {
                 https("blast",      "https://eth-mainnet.public.blastapi.io"),
             ],
 
-            // Only providers with confirmed public WebSocket endpoints.
+            // Each wss_jsonrpc entry auto-generates: wss_json_rpc + wss_subscribe probes.
             wss_jsonrpc: vec![
                 wss("publicnode", "wss://ethereum-rpc.publicnode.com"),
                 wss("drpc",       "wss://eth.drpc.org"),
             ],
 
-            // Execution boot nodes use enode:// (devp2p v4), not enr:- (discv5 v5).
-            // discv5_execution is empty because we have no usable ENRs for them.
-            discv5_execution: vec![],
-
             // ---- Section 2: Ethereum execution layer P2P ----
 
-            // Boot nodes are stable IPs maintained by the Ethereum Foundation.
-            // Port 30303 is the standard RLPx + DiscV5 port.
-            // If this port is blocked while port 443 works, it indicates
-            // selective censorship of Ethereum's execution P2P layer.
+            // Source: go-ethereum params/bootnodes.go (Ethereum Foundation).
+            // EF-hetzner-hel: same pubkey as former EF-southeast-asia (52.187.207.27); node relocated.
             p2p_boot_nodes: vec![
-                boot("EF-asia-pacific",   "18.138.108.67",  30303),
-                boot("EF-us-east",        "3.209.45.79",    30303),
-                boot("EF-southeast-asia", "52.187.207.27",  30303),
+                boot("EF-ap-southeast",  "18.138.108.67",  30303),
+                boot("EF-us-east",       "3.209.45.79",    30303),
+                boot("EF-hetzner-hel",   "65.108.70.101",  30303),
+                boot("EF-hetzner-fsn",   "157.90.35.166",  30303),
             ],
 
-            // Same IPs as p2p_boot_nodes — tests UDP:30303 (discv4 discovery) separately from TCP.
             discv4_execution: vec![
-                boot("EF-asia-pacific",   "18.138.108.67",  30303),
-                boot("EF-us-east",        "3.209.45.79",    30303),
-                boot("EF-southeast-asia", "52.187.207.27",  30303),
+                boot("EF-ap-southeast",  "18.138.108.67",  30303),
+                boot("EF-us-east",       "3.209.45.79",    30303),
+                boot("EF-hetzner-hel",   "65.108.70.101",  30303),
+                boot("EF-hetzner-fsn",   "157.90.35.166",  30303),
             ],
 
-            // DNS comparison targets: the most widely used RPC provider domains.
-            // Compares what the system DNS says vs. what Cloudflare 1.1.1.1 says.
+            // Execution boot nodes use enode:// (devp2p v4), not enr:- (discv5 v5).
+            discv5_execution: vec![],
+
+            // enode:// URLs include the remote's secp256k1 public key, required for
+            // the ECIES encryption of the RLPx auth message (EIP-8).
+            // Source: go-ethereum params/bootnodes.go.
+            rlpx_targets: vec![
+                rlpx("EF-ap-southeast",
+                    "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@18.138.108.67:30303"),
+                rlpx("EF-us-east",
+                    "enode://22a8232c3abc76a16ae9d6c3b164f98775fe226f0917b0ca871128a74a8e9630b458460865bab457221f1d448dd9791d24c4e5d88786180ac185df813a68d4de@3.209.45.79:30303"),
+                rlpx("EF-hetzner-hel",
+                    "enode://2b252ab6a1d0f971d9722cb839a42cb81db019ba44c08754628ab4a823487071b5695317c8ccd085219c3a03af063495b2f1da8d18218da2d6a82981b45e6ffc@65.108.70.101:30303"),
+                rlpx("EF-hetzner-fsn",
+                    "enode://4aeb4ab6c14b23e2c4cfdce879c04b0748a20d8e9b59e25ded2a08143e265c6c25936e74cbc8e641e3312ca288673d91f2f93f8e277de3cfa444ecdaaf982052@157.90.35.166:30303"),
+            ],
+
             dns_compare: vec![
                 dns_cmp("publicnode",         "ethereum-rpc.publicnode.com"),
                 dns_cmp("cloudflare",         "cloudflare-eth.com"),
@@ -241,33 +266,20 @@ pub fn default_config() -> Config {
 
             // ---- Section 3: Ethereum consensus layer (Beacon chain) ----
 
-            // Consensus boot node ENRs sourced from Lighthouse, Teku, and EF.
-            // These nodes advertise enr:- records, making DiscV5 v5 pings viable.
+            // ENR strings published by client teams in their official repositories.
+            // Only 3 nodes remain after empirical testing — see DESIGN.md §11.4b for the
+            // detailed technical rationale for all nodes that were evaluated and removed.
             discv5_consensus: vec![
-                Discv5Target {
-                    name: "teku-aws-ohio".to_string(),
-                    enr: "enr:-Iu4QLm7bZGdAt9NSeJG0cEnJohWcQTQaI9wFLu3Q7eHIDfrI4cwtzvEW3F3VbG9XdFXlrHyFGeXPn9snTCQJ9bnMRABgmlkgnY0gmlwhAOTJQCJc2VjcDI1NmsxoQIZdZD6tDYpkpEfVo5bgiU8MGRjhcOmHGD2nErK0UKRrIN0Y3CCIyiDdWRwgiMo".to_string(),
-                },
-                Discv5Target {
-                    name: "teku-aws-sydney".to_string(),
-                    enr: "enr:-Iu4QEDJ4Wa_UQNbK8Ay1hFEkXvd8psolVK6OhfTL9irqz3nbXxxWyKwEplPfkju4zduVQj6mMhUCm9R2Lc4YM5jPcIBgmlkgnY0gmlwhANrfESJc2VjcDI1NmsxoQJCYz2-nsqFpeEj6eov9HSi9QssIVIVNr0I89J1vXM9foN0Y3CCIyiDdWRwgiMo".to_string(),
-                },
-                Discv5Target {
-                    name: "lighthouse-sydney".to_string(),
-                    enr: "enr:-Le4QPUXJS2BTORXxyx2Ia-9ae4YqA_JWX3ssj4E_J-3z1A-HmFGrU8BpvpqhNabayXeOZ2Nq_sbeDgtzMJpLLnXFgAChGV0aDKQtTA_KgEAAAAAIgEAAAAAAIJpZIJ2NIJpcISsaa0Zg2lwNpAkAIkHAAAAAPA8kv_-awoTiXNlY3AyNTZrMaEDHAD2JKYevx89W0CcFJFiskdcEzkH_Wdv9iW42qLK79ODdWRwgiMohHVkcDaCI4I".to_string(),
-                },
-                Discv5Target {
-                    name: "lighthouse-london".to_string(),
-                    enr: "enr:-Le4QLHZDSvkLfqgEo8IWGG96h6mxwe_PsggC20CL3neLBjfXLGAQFOPSltZ7oP6ol54OvaNqO02Rnvb8YmDR274uq8ChGV0aDKQtTA_KgEAAAAAIgEAAAAAAIJpZIJ2NIJpcISLosQxg2lwNpAqAX4AAAAAAPA8kv_-ax65iXNlY3AyNTZrMaEDBJj7_dLFACaxBfaI8KZTh_SSJUjhyAyfshimvSqo22WDdWRwgiMohHVkcDaCI4I".to_string(),
-                },
-                Discv5Target {
-                    name: "nimbus-frankfurt".to_string(),
-                    enr: "enr:-LK4QA8FfhaAjlb_BXsXxSfiysR7R52Nhi9JBt4F8SPssu8hdE1BXQQEtVDC3qStCW60LSO7hEsVHv5zm8_6Vnjhcn0Bh2F0dG5ldHOIAAAAAAAAAACEZXRoMpC1MD8qAAAAAP__________gmlkgnY0gmlwhAN4aBKJc2VjcDI1NmsxoQJerDhsJ-KxZ8sHySMOCmTO6sHM3iCFQ6VMvLTe948MyYN0Y3CCI4yDdWRwgiOM".to_string(),
-                },
+                // Teku (ConsenSys) — tcp4=9000 advertised; TCP:9000 is firewalled (discovery-only).
+                Discv5Target { name: "teku-aws-ohio".into(),
+                    enr: "enr:-Iu4QLm7bZGdAt9NSeJG0cEnJohWcQTQaI9wFLu3Q7eHIDfrI4cwtzvEW3F3VbG9XdFXlrHyFGeXPn9snTCQJ9bnMRABgmlkgnY0gmlwhAOTJQCJc2VjcDI1NmsxoQIZdZD6tDYpkpEfVo5bgiU8MGRjhcOmHGD2nErK0UKRrIN0Y3CCIyiDdWRwgiMo".into() },
+                Discv5Target { name: "teku-aws-sydney".into(),
+                    enr: "enr:-Iu4QEDJ4Wa_UQNbK8Ay1hFEkXvd8psolVK6OhfTL9irqz3nbXxxWyKwEplPfkju4zduVQj6mMhUCm9R2Lc4YM5jPcIBgmlkgnY0gmlwhANrfESJc2VjcDI1NmsxoQJCYz2-nsqFpeEj6eov9HSi9QssIVIVNr0I89J1vXM9foN0Y3CCIyiDdWRwgiMo".into() },
+                // Nimbus (Status) — tcp4=9100 (Prometheus metrics, not libp2p); DiscV5 OK.
+                Discv5Target { name: "nimbus-frankfurt".into(),
+                    enr: "enr:-LK4QA8FfhaAjlb_BXsXxSfiysR7R52Nhi9JBt4F8SPssu8hdE1BXQQEtVDC3qStCW60LSO7hEsVHv5zm8_6Vnjhcn0Bh2F0dG5ldHOIAAAAAAAAAACEZXRoMpC1MD8qAAAAAP__________gmlkgnY0gmlwhAN4aBKJc2VjcDI1NmsxoQJerDhsJ-KxZ8sHySMOCmTO6sHM3iCFQ6VMvLTe948MyYN0Y3CCI4yDdWRwgiOM".into() },
             ],
 
-            // Public beacon chain REST API endpoints (no API key required).
-            // GET /eth/v1/node/version — tests HTTPS access to consensus-layer data.
             beacon_https: vec![
                 BeaconHttpsTarget {
                     name: "publicnode".to_string(),

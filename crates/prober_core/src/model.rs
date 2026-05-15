@@ -53,30 +53,40 @@ pub enum ProbeKind {
     // --- RPC provider availability ---
     DnsResolve,
     TcpConnect,
+    /// TLS handshake only (no HTTP request). Sits between tcp_connect and https_json_rpc.
+    TlsHandshake,
     HttpControl,
     HttpsJsonRpc,
+    /// eth_sendRawTransaction write test. Success = any JSON-RPC response (even an error).
+    HttpsJsonRpcWrite,
     WssJsonRpc,
+    /// eth_subscribe newHeads subscription test. Success = subscription ID received.
+    WssSubscribe,
 
-    // --- Ethereum P2P network ---
+    // --- Ethereum execution layer P2P ---
     /// TCP connect to an Ethereum execution boot node on port 30303 (RLPx/DiscV5 port).
-    /// If this fails while port 443 works, it indicates selective port blocking.
     P2pTcpConnect,
     /// Compares the system resolver result against Cloudflare DoH (1.1.1.1).
-    /// A mismatch or system-only failure indicates potential DNS poisoning or blocking.
     DnsCompare,
     /// DiscV5 ping to an Ethereum execution boot node (ENR on port 30303).
     Discv5Ping,
     /// DiscV4 ping to an Ethereum execution boot node (UDP on port 30303).
-    /// Tests whether the execution-layer peer discovery protocol is reachable.
     Discv4Ping,
+    /// RLPx ECIES auth handshake to an execution boot node (TCP:30303).
+    /// Success = remote sends any data back, proving the RLPx layer is reachable.
+    RlpxHandshake,
 
     // --- Ethereum consensus layer (Beacon chain) ---
-
+    /// TCP connect to a consensus boot node on port 9000 (libp2p port).
+    /// Derived from discv5_consensus ENRs via ip4/tcp4 fields.
+    BeaconTcpConnect,
     /// DiscV5 ping to a consensus boot node (ENR, typically on port 9000).
     BeaconDiscv5Ping,
     /// HTTP GET to a public beacon chain REST API endpoint (/eth/v1/node/version).
-    /// Tests whether consensus-layer data access is reachable over HTTPS (port 443).
     BeaconHttps,
+    /// libp2p multistream-select negotiation to a consensus boot node (TCP:9000).
+    /// Success = remote acknowledges /multistream/1.0.0, confirming it is a live libp2p node.
+    LibP2pHandshake,
 }
 
 pub fn now_ms() -> u128 {

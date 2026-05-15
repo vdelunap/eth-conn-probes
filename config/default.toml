@@ -128,11 +128,11 @@ method = "eth_chainId"
 # ---------------------------------------------------------------------------
 # P2P boot nodes — TCP connect to port 30303 (RLPx + DiscV5).
 # If this port is blocked while 443 works → selective Ethereum P2P censorship.
-# IPs are stable Ethereum Foundation boot nodes.
+# Source: go-ethereum params/bootnodes.go (mainnet MainnetBootnodes).
 # ---------------------------------------------------------------------------
 
 [[probes.p2p_boot_nodes]]
-name = "EF-asia-pacific"
+name = "EF-ap-southeast"
 host = "18.138.108.67"
 port = 30303
 
@@ -141,10 +141,40 @@ name = "EF-us-east"
 host = "3.209.45.79"
 port = 30303
 
+# Previously EF-southeast-asia (52.187.207.27, AWS): node moved to Hetzner Helsinki.
 [[probes.p2p_boot_nodes]]
-name = "EF-southeast-asia"
-host = "52.187.207.27"
+name = "EF-hetzner-hel"
+host = "65.108.70.101"
 port = 30303
+
+[[probes.p2p_boot_nodes]]
+name = "EF-hetzner-fsn"
+host = "157.90.35.166"
+port = 30303
+
+# ---------------------------------------------------------------------------
+# RLPx targets — ECIES auth handshake to execution boot nodes on TCP:30303.
+# Requires the rlpx Cargo feature.  The enode:// URL embeds the 64-byte
+# secp256k1 public key needed for ECIES encryption of the auth message.
+# IPs and pubkeys are Ethereum Foundation boot nodes (go-ethereum bootnodes.go).
+# ---------------------------------------------------------------------------
+
+[[probes.rlpx_targets]]
+name  = "EF-ap-southeast"
+enode = "enode://d860a01f9722d78051619d1e2351aba3f43f943f6f00718d1b9baa4101932a1f5011f16bb2b1bb35db20d6fe28fa0bf09636d26a87d31de9ec6203eeedb1f666@18.138.108.67:30303"
+
+[[probes.rlpx_targets]]
+name  = "EF-us-east"
+enode = "enode://22a8232c3abc76a16ae9d6c3b164f98775fe226f0917b0ca871128a74a8e9630b458460865bab457221f1d448dd9791d24c4e5d88786180ac185df813a68d4de@3.209.45.79:30303"
+
+# Same pubkey as former EF-southeast-asia; node relocated to Hetzner Helsinki.
+[[probes.rlpx_targets]]
+name  = "EF-hetzner-hel"
+enode = "enode://2b252ab6a1d0f971d9722cb839a42cb81db019ba44c08754628ab4a823487071b5695317c8ccd085219c3a03af063495b2f1da8d18218da2d6a82981b45e6ffc@65.108.70.101:30303"
+
+[[probes.rlpx_targets]]
+name  = "EF-hetzner-fsn"
+enode = "enode://4aeb4ab6c14b23e2c4cfdce879c04b0748a20d8e9b59e25ded2a08143e265c6c25936e74cbc8e641e3312ca288673d91f2f93f8e277de3cfa444ecdaaf982052@157.90.35.166:30303"
 
 # ---------------------------------------------------------------------------
 # DNS comparison — system resolver vs Cloudflare DoH (1.1.1.1).
@@ -183,7 +213,7 @@ host = "lodestar-mainnet.chainsafe.io"
 # ---------------------------------------------------------------------------
 
 [[probes.discv4_execution]]
-name = "EF-asia-pacific"
+name = "EF-ap-southeast"
 host = "18.138.108.67"
 port = 30303
 
@@ -193,16 +223,25 @@ host = "3.209.45.79"
 port = 30303
 
 [[probes.discv4_execution]]
-name = "EF-southeast-asia"
-host = "52.187.207.27"
+name = "EF-hetzner-hel"
+host = "65.108.70.101"
+port = 30303
+
+[[probes.discv4_execution]]
+name = "EF-hetzner-fsn"
+host = "157.90.35.166"
 port = 30303
 
 # ---------------------------------------------------------------------------
 # DiscV5 consensus — ping consensus boot nodes via DiscV5 v5.
 # Consensus nodes publish ENRs with enr:- format, unlike execution nodes
 # which use enode:// (devp2p v4) and cannot be reached by DiscV5 v5.
+# ENRs with tcp4 also generate Beacon TCP + libp2p handshake probes.
+# ENRs without tcp4 fall back to the udp4 port for TCP probes.
 # ---------------------------------------------------------------------------
 
+# Teku (ConsenSys) — tcp4=9000 advertised; TCP:9000 firewalled (discovery-only boot nodes).
+# See DESIGN.md §11.4b for all evaluated candidates and removal rationale.
 [[probes.discv5_consensus]]
 name = "teku-aws-ohio"
 enr  = "enr:-Iu4QLm7bZGdAt9NSeJG0cEnJohWcQTQaI9wFLu3Q7eHIDfrI4cwtzvEW3F3VbG9XdFXlrHyFGeXPn9snTCQJ9bnMRABgmlkgnY0gmlwhAOTJQCJc2VjcDI1NmsxoQIZdZD6tDYpkpEfVo5bgiU8MGRjhcOmHGD2nErK0UKRrIN0Y3CCIyiDdWRwgiMo"
@@ -211,14 +250,7 @@ enr  = "enr:-Iu4QLm7bZGdAt9NSeJG0cEnJohWcQTQaI9wFLu3Q7eHIDfrI4cwtzvEW3F3VbG9XdFX
 name = "teku-aws-sydney"
 enr  = "enr:-Iu4QEDJ4Wa_UQNbK8Ay1hFEkXvd8psolVK6OhfTL9irqz3nbXxxWyKwEplPfkju4zduVQj6mMhUCm9R2Lc4YM5jPcIBgmlkgnY0gmlwhANrfESJc2VjcDI1NmsxoQJCYz2-nsqFpeEj6eov9HSi9QssIVIVNr0I89J1vXM9foN0Y3CCIyiDdWRwgiMo"
 
-[[probes.discv5_consensus]]
-name = "lighthouse-sydney"
-enr  = "enr:-Le4QPUXJS2BTORXxyx2Ia-9ae4YqA_JWX3ssj4E_J-3z1A-HmFGrU8BpvpqhNabayXeOZ2Nq_sbeDgtzMJpLLnXFgAChGV0aDKQtTA_KgEAAAAAIgEAAAAAAIJpZIJ2NIJpcISsaa0Zg2lwNpAkAIkHAAAAAPA8kv_-awoTiXNlY3AyNTZrMaEDHAD2JKYevx89W0CcFJFiskdcEzkH_Wdv9iW42qLK79ODdWRwgiMohHVkcDaCI4I"
-
-[[probes.discv5_consensus]]
-name = "lighthouse-london"
-enr  = "enr:-Le4QLHZDSvkLfqgEo8IWGG96h6mxwe_PsggC20CL3neLBjfXLGAQFOPSltZ7oP6ol54OvaNqO02Rnvb8YmDR274uq8ChGV0aDKQtTA_KgEAAAAAIgEAAAAAAIJpZIJ2NIJpcISLosQxg2lwNpAqAX4AAAAAAPA8kv_-ax65iXNlY3AyNTZrMaEDBJj7_dLFACaxBfaI8KZTh_SSJUjhyAyfshimvSqo22WDdWRwgiMohHVkcDaCI4I"
-
+# Nimbus (Status) — tcp4=9100 (Prometheus metrics, not libp2p); DiscV5 OK.
 [[probes.discv5_consensus]]
 name = "nimbus-frankfurt"
 enr  = "enr:-LK4QA8FfhaAjlb_BXsXxSfiysR7R52Nhi9JBt4F8SPssu8hdE1BXQQEtVDC3qStCW60LSO7hEsVHv5zm8_6Vnjhcn0Bh2F0dG5ldHOIAAAAAAAAAACEZXRoMpC1MD8qAAAAAP__________gmlkgnY0gmlwhAN4aBKJc2VjcDI1NmsxoQJerDhsJ-KxZ8sHySMOCmTO6sHM3iCFQ6VMvLTe948MyYN0Y3CCI4yDdWRwgiOM"
