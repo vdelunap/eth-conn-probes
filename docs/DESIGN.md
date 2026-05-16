@@ -30,6 +30,16 @@
 6. [System Architecture](#6-system-architecture)
 7. [Implemented Probes](#7-implemented-probes)
 8. [Connectivity by Participant Type](#8-connectivity-by-participant-type)
+   - 8.0 [Taxonomy of Ethereum Participants](#80-taxonomy-of-ethereum-participants)
+   - 8.1 [Wallet and dApp User](#81-wallet-and-dapp-user)
+   - 8.2 [Light Client](#82-light-client)
+   - 8.3 [Execution Full Node and Archive Node](#83-execution-full-node-and-archive-node)
+   - 8.4 [Consensus Full Node](#84-consensus-full-node)
+   - 8.5 [Validator (Staker)](#85-validator-staker)
+   - 8.6 [MEV Ecosystem (Searchers, Builders)](#86-mev-ecosystem-searchers-builders)
+   - 8.7 [Coverage Matrix](#87-coverage-matrix)
+   - 8.8 [Censorship Interpretation Key](#88-censorship-interpretation-key)
+   - 8.9 [Target Reference: What Is Probed and Why](#89-target-reference-what-is-probed-and-why)
    - 8bis [Probe Result Interpretation: A Worked Example](#8bis-probe-result-interpretation-a-worked-example)
 9. [Technical Decisions and Justifications](#9-technical-decisions-and-justifications)
 10. [What Is Not Implemented and Why](#10-what-is-not-implemented-and-why)
@@ -763,43 +773,418 @@ The three sequential attempts per probe are intentional: intermittent failures (
 
 ## 8. Connectivity by Participant Type
 
-This section maps each Ethereum participant type to the probes that cover their connectivity requirements.
+This section is the core of the design document. It maps every Ethereum participant role to the probes that cover their connectivity requirements, explains what each probe result means for that role, and identifies what is not yet covered. The goal is to answer the question: **given a set of probe results, what can a user in this location do on Ethereum?**
 
-### 8.1 As a Wallet / dApp User
+### 8.0 Taxonomy of Ethereum Participants
 
-A wallet connects to Ethereum exclusively through JSON-RPC. It does not participate in P2P networks. Its connectivity requirements are:
-- DNS resolution of provider domains → `dns_resolve`, `dns_compare`.
-- TCP:443 to provider → `tcp_connect`.
-- TLS handshake → `tls_handshake`.
-- Read access: `eth_chainId`, `eth_blockNumber`, `eth_getBalance` → `https_json_rpc`.
-- Write access: `eth_sendRawTransaction` → `https_json_rpc_write`.
-- Real-time subscriptions (DApp): `eth_subscribe` → `wss_subscribe`.
+The Ethereum network is composed of participants with different roles and connectivity requirements:
 
-**Verdict**: Fully covered by the combination of these probes. The `https_json_rpc_write` probe specifically catches the OFAC-type censorship that is most relevant to wallet users.
+| Participant | P2P participation | Uses JSON-RPC | Uses Beacon API |
+|---|---|---|---|
+| Wallet user | No | Yes (reads + sends txs) | No |
+| dApp (frontend) | No | Yes (reads + sends txs) | Sometimes |
+| Light client | No (Portal optional) | Via provider | Yes (consensus data) |
+| Execution full node | Yes (devp2p) | Self-hosted | No |
+| Execution archive node | Yes (devp2p) | Self-hosted | No |
+| Consensus full node | Yes (libp2p) | Via paired exec node | Self-hosted |
+| Validator (staker) | Yes (libp2p) | Via paired exec node | Self-hosted |
+| MEV searcher | No | Yes (mempool access, tx submission) | No |
+| MEV block builder | No | Yes (tx bundles, relay HTTPS) | No |
 
-### 8.2 As a Full Node Operator
+---
 
-A full node operator needs:
-- RPC provider access (same as wallet) for bootstrapping.
-- Execution P2P: DiscV4 peer discovery (UDP:30303) → `discv4_ping`.
-- Execution P2P: RLPx transport (TCP:30303) → `p2p_tcp_connect`, `rlpx_handshake`.
-- (Not probed): ETH protocol block sync — see Section 10.
+### 8.1 Wallet and dApp User
 
-**Verdict**: The combination of `discv4_ping` + `p2p_tcp_connect` + `rlpx_handshake` covers discovery, transport, and protocol-layer reachability. The one uncovered gap is the ETH protocol `Status` exchange, which would confirm full node sync capability.
+**What they need**: A wallet or dApp accesses Ethereum exclusively through JSON-RPC over HTTPS/WSS. It never participates in P2P networks. All communication goes through public RPC providers (Infura, Cloudflare, publicnode, etc.) via standard HTTPS port 443.
 
-### 8.3 As a Consensus Node / Validator
+**Connectivity stack** (in order, each layer is a prerequisite for the next):
 
-A consensus node needs:
-- Beacon chain access: Beacon HTTPS API → `beacon_https`.
-- Consensus P2P discovery: DiscV5 UDP:9000 → `beacon_discv5_ping` (probed against known boot nodes).
-- Consensus P2P transport: TCP:9000 → `beacon_tcp_connect` (probed against live peers from Beacon API).
-- Consensus P2P protocol: libp2p → `libp2p_handshake` (probed against live peers from Beacon API).
+| Layer | Need | Probe | Section |
+|---|---|---|---|
+| 1 | DNS resolution of provider domain | `dns_resolve` | 1 |
+| 2 | DNS integrity (not manipulated by ISP) | `dns_compare` | 2 |
+| 3 | TCP:443 reachable | `tcp_connect` | 1 |
+| 4 | TLS handshake (no certificate injection) | `tls_handshake` | 1 |
+| 5 | JSON-RPC read access | `https_jsonrpc` | 1 |
+| 6 | Transaction submission (write access) | `https_jsonrpc_write` | 1 |
+| 7 | Real-time event subscriptions | `wss_jsonrpc` + `wss_subscribe` | 1 |
 
-**Verdict**: Discovery, transport, and protocol-layer reachability are all covered. Boot nodes are probed for DiscV5 discovery only — TCP and libp2p are probed against real full peer nodes discovered dynamically from the Beacon API (`/eth/v1/node/peers?state=connected`, inbound-only). The uncovered layer is full GossipSub participation (attestation/block gossip), which requires completing the Noise handshake and stream multiplexing.
+**Coverage**: Complete. Every censorship vector between the user's machine and the RPC provider is covered. The `https_jsonrpc_write` probe specifically catches OFAC-style write censorship — the most commercially relevant form, where providers accept reads but reject transaction forwarding based on address blacklists.
 
-### 8.4 As an Archive Node
+**How to read your results for this role**:
+- All Section 1 probes OK → Full wallet/dApp access, no censorship detected at any layer.
+- Any `dns_resolve` fails → RPC provider domain is being blocked at DNS. Wallet cannot connect.
+- `dns_compare` shows mismatch → ISP DNS is returning different IP addresses. Possible DNS hijacking.
+- `tcp_connect` fails on 443 while other ports work → IP-level blocking of the CDN serving this provider.
+- `tls_handshake` fails with certificate error → TLS interception (MITM proxy). The ISP or corporate network is terminating SSL.
+- `https_jsonrpc` fails (non-503) while TCP/TLS succeed → Application-layer block (geographic restriction, rate limit, service blocked).
+- `https_jsonrpc` OK but `https_jsonrpc_write` fails → Write-path censorship. The provider accepts queries but rejects transaction forwarding. Classic OFAC compliance (as Infura did for sanctioned addresses in 2022).
+- Both HTTPS OK, `wss_subscribe` fails → WebSocket specifically blocked. Corporate proxies often proxy HTTP but not WebSocket upgrades.
 
-An archive node is a superset of a full node from a networking perspective. The same probes apply. Archive nodes serve the same P2P protocols on the same ports.
+**Gaps**: None. This participant type is fully covered.
+
+---
+
+### 8.2 Light Client
+
+**What they need**: A light client (Helios, EIP-4444 clients) does not sync the full chain. It fetches consensus state (sync committee updates, finalized block headers) from a beacon node via the Beacon REST API, and serves execution queries via JSON-RPC using Merkle proofs against those headers.
+
+**Connectivity stack**:
+
+| Layer | Need | Probe | Section |
+|---|---|---|---|
+| 1–6 | All wallet layers (needs JSON-RPC for execution queries) | Same as §8.1 | 1 |
+| 7 | Beacon REST API (sync committee, finalized header) | `beacon_https` | 3 |
+| 8 | Portal Network (stateless block/receipt data) | ❌ Not implemented | — |
+
+**Coverage**: Layers 1–7 are covered (Section 1 + Beacon API probe). The Portal Network layer is not implemented.
+
+**How to read your results for this role**:
+- Section 1 OK + `beacon_https` OK → Light client has access to both consensus state and execution data. Full functionality.
+- `beacon_https` fails → Cannot sync consensus headers. Light client cannot verify block validity.
+- Section 1 fails → Cannot serve execution queries to the user.
+
+**Gaps**: Portal Network (uTP-based) would complete coverage.
+
+---
+
+### 8.3 Execution Full Node and Archive Node
+
+**What they need**: An execution node (Geth, Erigon, Nethermind, Besu) participates in the devp2p P2P network to sync blocks and propagate transactions. An archive node is identical from a networking perspective — the difference is in storage, not P2P protocol.
+
+**Connectivity stack**:
+
+| Layer | Need | Probe | Section |
+|---|---|---|---|
+| 1 | Peer discovery via DiscV4 (UDP:30303) | `discv4_ping` | 2 |
+| 2 | P2P transport (TCP:30303) | `p2p_tcp_connect` | 2 |
+| 3 | RLPx ECIES auth (no DPI filtering) | `rlpx_handshake` | 2 |
+| 4 | ETH protocol Status exchange | ❌ Not implemented | — |
+| 5 | DNS non-manipulation (for RPC provider domains) | `dns_compare` | 2 |
+
+**Coverage**: Layers 1–3 and 5 are covered. Layer 4 (the ETH `Status` message exchange) is the only gap — it would confirm the node can participate in block propagation at the application protocol level, not just establish the transport connection.
+
+**How to read your results for this role**:
+
+- All Section 2 probes OK → Execution P2P fully reachable. You can run a full node.
+- `discv4_ping` fails while Section 1 (TCP:443) succeeds → UDP:30303 is specifically blocked. Peer discovery is impossible; node would only connect to hardcoded boot nodes.
+- `p2p_tcp_connect` fails while `tcp_connect` (port 443) succeeds → TCP:30303 is selectively blocked. Strong censorship signal — this is port-level filtering, not a service being down.
+- `p2p_tcp_connect` OK but `rlpx_handshake` times out → **DPI filtering of RLPx auth packets**. This is the most targeted form of execution P2P censorship: the firewall allows TCP connections on port 30303 but inspects the payload and drops packets matching the RLPx ECIES pattern. A connection reset (RST) means the port is open but the remote rejected your ephemeral identity (expected — boot nodes always do this); only a timeout indicates DPI.
+- `dns_compare` shows mismatch → DNS manipulation affecting provider domain resolution. Doesn't affect P2P but affects RPC access.
+
+**Severity ordering** (most to least targeted censorship):
+1. RLPx DPI filtering — allows TCP:30303 but drops protocol-specific bytes
+2. TCP:30303 blocked while UDP:30303 open — transport-level block
+3. UDP:30303 blocked while TCP:30303 open — discovery-only block
+4. Both TCP and UDP:30303 blocked — complete execution P2P isolation
+5. DNS manipulation — affects RPC provider access, not P2P
+
+**Gaps**: ETH `Status` exchange (would confirm block sync is possible, not just transport connectivity).
+
+---
+
+### 8.4 Consensus Full Node
+
+**What they need**: A consensus node (Lighthouse, Prysm, Teku, Nimbus, Lodestar) participates in the libp2p network to receive blocks and attestations via GossipSub, and uses DiscV5 for peer discovery.
+
+**Connectivity stack**:
+
+| Layer | Need | Probe | Section |
+|---|---|---|---|
+| 1 | Peer discovery via DiscV5 (UDP:9000) | `beacon_discv5_ping` | 3 |
+| 2 | P2P transport (TCP:9000) | `beacon_tcp_connect` | 3 |
+| 3 | libp2p multistream-select (protocol negotiation) | `libp2p_handshake` | 3 |
+| 4 | Noise XX handshake (encryption layer) | ❌ Not implemented | — |
+| 5 | GossipSub subscription (block/attestation gossip) | ❌ Not implemented | — |
+| 6 | Beacon REST API (checkpoint sync) | `beacon_https` | 3 |
+
+**Coverage**: Layers 1–3 and 6 are covered. Layers 4 and 5 are gaps — the libp2p probe confirms that a peer speaks the multistream protocol, but does not complete the Noise XX handshake (the encryption layer required before any gossip messages are exchanged).
+
+**Practical significance of coverage**: The libp2p multistream handshake succeeding means the remote node is a live libp2p node that accepted our protocol negotiation. A DPI firewall that targets libp2p would drop our bytes before this exchange completes. In practice, coverage of layers 1–3 is sufficient to detect ISP-level and network-level censorship; layers 4–5 would only add detection of protocol-specific filtering that targets Noise specifically — an extremely advanced and rare attack.
+
+**How to read your results for this role**:
+- All Section 3 probes OK → Consensus P2P reachable. You can run a consensus full node.
+- `beacon_discv5_ping` fails → UDP:9000 blocked. Peer discovery is impossible.
+- `beacon_discv5_ping` OK, `beacon_tcp_connect` fails → TCP:9000 blocked while UDP:9000 is open. Discovery works but cannot establish libp2p connections. Cannot participate in block propagation.
+- `beacon_tcp_connect` OK, `libp2p_handshake` fails → **DPI filtering of libp2p protocol bytes**. Most targeted form: allows TCP:9000 connections but inspects the payload and drops multistream negotiation.
+- `beacon_https` fails → Beacon REST API inaccessible. Checkpoint sync is blocked.
+
+**Severity ordering**:
+1. libp2p DPI filtering — allows TCP:9000 but drops multistream bytes
+2. TCP:9000 blocked while UDP:9000 open
+3. Both TCP and UDP:9000 blocked
+4. Beacon API blocked
+
+---
+
+### 8.5 Validator (Staker)
+
+**What they need**: A validator runs a consensus full node and additionally must submit attestations and block proposals. The network stack is identical to the consensus full node.
+
+| Layer | Need | Probe | Same as |
+|---|---|---|---|
+| 1–6 | All consensus full node layers | Same as §8.4 | §8.4 |
+| 7 | Block proposal via GossipSub | ❌ Not implemented | — |
+| 8 | Attestation submission via GossipSub | ❌ Not implemented | — |
+| 9 | MEV-boost relay (HTTPS) | Partially: `https_jsonrpc` + `https_jsonrpc_write` to Flashbots | 1 |
+
+**Coverage**: Same as consensus full node (§8.4). GossipSub participation (the actual attestation/block submission path) is not implemented. MEV-boost relay access is partially covered by the Flashbots probes in Section 1 — which test whether the relay's HTTPS endpoint accepts read and write requests — but does not test the builder-specific relay API.
+
+**How to read your results for this role**: Same as §8.4. Add: Flashbots/MEV Blocker `https_jsonrpc_write` failing → transaction submission to private mempools is blocked, affecting MEV revenue.
+
+---
+
+### 8.6 MEV Ecosystem (Searchers, Builders)
+
+**What they need**: MEV participants do not run P2P nodes. They interact with the Ethereum network through private RPC endpoints and relay APIs over HTTPS.
+
+**Connectivity stack**:
+
+| Layer | Need | Probe | Section |
+|---|---|---|---|
+| 1–6 | Standard wallet/dApp layers | Same as §8.1 | 1 |
+| 7 | Flashbots RPC read access | `https_jsonrpc` (flashbots) | 1 |
+| 8 | Flashbots bundle/tx submission | `https_jsonrpc_write` (flashbots) | 1 |
+| 9 | MEV Blocker (private mempool) | `https_jsonrpc` + `https_jsonrpc_write` (mevblocker) | 1 |
+| 10 | Builder-specific relay APIs | ❌ Not implemented (private/permissioned) | — |
+
+**Coverage**: Standard HTTPS access to Flashbots and MEV Blocker is fully covered. The write probe specifically tests whether `eth_sendRawTransaction` is accepted — the most relevant path for transaction submission. Builder-specific relay APIs (e.g., Flashbots `eth_sendBundle`) are not covered because they use non-standard method names and often require authentication.
+
+**How to read your results for this role**:
+- `https_jsonrpc_write` fails for Flashbots while `https_jsonrpc` (read) succeeds → Write-path censorship at the RPC level. Cannot submit transactions through this provider.
+- All Flashbots probes fail while other providers work → Flashbots-specific blocking (geographic restriction or OFAC policy applied to the relay endpoint).
+- All providers' write probes fail → Write path blocked for all providers. Cannot submit any transactions.
+
+---
+
+### 8.7 Coverage Matrix
+
+| Connectivity need | Probe(s) | Wallet | Light | Exec node | Cons node | Validator | MEV |
+|---|---|---|---|---|---|---|---|
+| DNS resolution | `dns_resolve` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| DNS integrity | `dns_compare` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| TCP:443 reachable | `tcp_connect` | ✓ | ✓ | — | — | — | ✓ |
+| TLS non-interception | `tls_handshake` | ✓ | ✓ | — | — | — | ✓ |
+| JSON-RPC read | `https_jsonrpc` | ✓ | ✓ | — | — | — | ✓ |
+| JSON-RPC write | `https_jsonrpc_write` | ✓ | — | — | — | — | ✓ |
+| WSS subscription | `wss_subscribe` | ✓ | — | — | — | — | ✓ |
+| Beacon REST API | `beacon_https` | — | ✓ | — | ✓ | ✓ | — |
+| DiscV4 discovery (UDP:30303) | `discv4_ping` | — | — | ✓ | — | — | — |
+| TCP:30303 transport | `p2p_tcp_connect` | — | — | ✓ | — | — | — |
+| RLPx DPI detection | `rlpx_handshake` | — | — | ✓ | — | — | — |
+| ETH protocol Status | — | — | — | ❌ gap | — | — | — |
+| DiscV5 discovery (UDP:9000) | `beacon_discv5_ping` | — | — | — | ✓ | ✓ | — |
+| TCP:9000 transport | `beacon_tcp_connect` | — | — | — | ✓ | ✓ | — |
+| libp2p multistream | `libp2p_handshake` | — | — | — | ✓ | ✓ | — |
+| Noise XX handshake | — | — | — | — | ❌ gap | ❌ gap | — |
+| GossipSub participation | — | — | — | — | ❌ gap | ❌ gap | — |
+| Portal Network | — | — | ❌ gap | — | — | — | — |
+| MEV relay APIs | — | — | — | — | — | ❌ gap | ❌ gap |
+
+**Legend**: ✓ = covered, — = not applicable to this role, ❌ gap = relevant but not implemented.
+
+---
+
+### 8.8 Censorship Interpretation Key
+
+This subsection translates specific probe failure patterns into actionable conclusions. For each pattern, the table shows what it means and which participants are affected.
+
+#### Execution layer (Section 2)
+
+| Pattern observed | What it means | Participants affected |
+|---|---|---|
+| `dns_compare` mismatch for any provider | ISP DNS is returning different IPs. Active DNS manipulation. | All (wallet, node bootstrap, light client) |
+| `p2p_tcp_connect` FAIL, `tcp_connect`(443) OK | TCP:30303 selectively blocked. Port-level filtering targeting Ethereum P2P. | Execution full node |
+| `discv4_ping` FAIL, `p2p_tcp_connect` OK | UDP:30303 blocked while TCP:30303 open. Discovery impossible, but existing peer connections would work if already established. | Execution full node |
+| Both `p2p_tcp_connect` and `discv4_ping` FAIL | Complete execution P2P isolation. No node participation possible. | Execution full node, archive node |
+| `p2p_tcp_connect` OK, `rlpx_handshake` timeout (not RST) | DPI filtering of RLPx auth packets. The firewall is identifying and dropping RLPx traffic specifically while allowing other TCP:30303 traffic. **Most targeted form of execution censorship.** | Execution full node |
+| `rlpx_handshake` RST (not timeout) | Normal boot node rejection of unknown identity. Not censorship. | — (expected) |
+
+#### Consensus layer (Section 3)
+
+| Pattern observed | What it means | Participants affected |
+|---|---|---|
+| `beacon_https` FAIL | Beacon REST API blocked. Cannot sync from checkpoint, light clients affected. | Light client, consensus node, validator |
+| `beacon_discv5_ping` FAIL | UDP:9000 blocked. Peer discovery impossible. | Consensus node, validator |
+| `beacon_discv5_ping` OK, `beacon_tcp_connect` FAIL | TCP:9000 blocked while UDP:9000 open. Can discover peers but cannot connect. | Consensus node, validator |
+| Both `beacon_discv5_ping` and `beacon_tcp_connect` FAIL | Complete consensus P2P isolation. | Consensus node, validator |
+| `beacon_tcp_connect` OK, `libp2p_handshake` timeout | DPI filtering of libp2p multistream bytes. **Most targeted form of consensus censorship.** | Consensus node, validator |
+| `libp2p_handshake` RST immediately after TCP connect | Peer rejects our protocol. Could be running a different libp2p implementation (IPFS, etc.). Not ISP-level censorship. | — (non-censorship failure) |
+
+#### RPC provider layer (Section 1)
+
+| Pattern observed | What it means | Participants affected |
+|---|---|---|
+| `dns_resolve` FAIL for a provider | Provider domain blocked at DNS. Cannot even resolve the address. | All users of that provider |
+| `tls_handshake` FAIL with certificate error | TLS MITM interception. Government or corporate proxy is terminating SSL. | All HTTPS users |
+| `https_jsonrpc` OK, `https_jsonrpc_write` FAIL (403/auth error) | Provider is accepting reads but blocking write/tx submission. OFAC compliance, geographic restriction. | Wallet users sending transactions, searchers |
+| `https_jsonrpc` FAIL (HTTP 503), DNS/TCP/TLS OK | Backend outage (CDN layer up, origin server down). Not censorship. | That specific provider's users |
+| `wss_subscribe` FAIL, `https_jsonrpc` OK | WebSocket specifically blocked. Common in corporate/government proxies. | dApps using subscriptions, searchers monitoring mempool |
+| All providers' write paths FAIL simultaneously | Systemic write censorship across the entire RPC provider ecosystem. Would be an unprecedented event. | All Ethereum users in this location |
+
+#### Cross-section patterns
+
+| Pattern observed | What it means |
+|---|---|
+| Section 1 OK, Section 2 all fail | Can use Ethereum as a wallet, but cannot run an execution node. Selective P2P port blocking. |
+| Section 1 OK, Section 3 all fail | Can use Ethereum as a wallet, but cannot run a validator/consensus node. |
+| Sections 1+2 OK, `beacon_tcp_connect` fails | Can use wallet + execution node, but cannot participate in consensus layer P2P. The most specific consensus censorship scenario. |
+| All sections fail | No Ethereum connectivity at all. Complete network-level block. |
+| Section 2 OK, Section 1 fails for some providers | P2P network accessible, but specific RPC providers are blocked. Node operators unaffected; wallet users for those providers are. |
+
+---
+
+### 8.9 Target Reference: What Is Probed and Why
+
+This subsection is a complete, concrete reference of every configured target: what type of entity it is, who operates it, which probes are generated, and exactly what each probe verifies. Targets are grouped by category. Dynamic targets (live peers from Beacon API) are described separately since they vary per run.
+
+---
+
+#### Category 1 — RPC Provider Endpoints (Section 1)
+
+These are centralized middleware services that expose Ethereum JSON-RPC over HTTPS/WSS. They are not raw Ethereum nodes — internally they run full nodes, but externally they behave as API services. All 8 providers generate the same set of probes. publicnode and drpc additionally expose WebSocket and get 2 extra probes each.
+
+| Target | Operator | Endpoint |
+|---|---|---|
+| publicnode | Public Node, Inc. | ethereum-rpc.publicnode.com |
+| cloudflare | Cloudflare | cloudflare-eth.com |
+| llamarpc | LlamaNodes | eth.llamarpc.com |
+| drpc | dRPC | eth.drpc.org |
+| flashbots | Flashbots | rpc.flashbots.net |
+| 1rpc | 1RPC (Automata) | 1rpc.io/eth |
+| mevblocker | CoW Protocol / Gnosis | rpc.mevblocker.io |
+| blast | Blast API (Bware Labs) | eth-mainnet.public.blastapi.io |
+
+**Probes generated per provider and what they verify:**
+
+| Probe | Verifies |
+|---|---|
+| `dns_resolve` | The provider's domain resolves from the user's local resolver. If this fails, the domain is NXDOMAIN-blocked or DNS is broken. |
+| `tcp_connect` (port 443) | TCP:443 is reachable. Tests whether the CDN layer's IP is blocked at the network level. |
+| `tls_handshake` | Full TLS 1.3 handshake completes with a valid certificate chain. Detects MITM interception: if an ISP proxy terminates TLS, it presents a different certificate that fails verification. |
+| `https_jsonrpc` | `eth_chainId` returns a JSON-RPC `result`. Verifies read-path access at the application level. A CDN returning 503 (backend down) or 403 (geo-blocked) is caught here while lower layers (DNS, TCP, TLS) still pass. |
+| `https_jsonrpc_write` | `eth_sendRawTransaction` with an intentionally invalid payload (`"0x"`) returns any JSON-RPC response (including an error). Verifies write-path access. If this fails while read succeeds, the provider is selectively blocking transaction submission — OFAC compliance or geographic restriction. |
+| `wss_jsonrpc` *(publicnode, drpc only)* | WebSocket connection upgrades and `eth_chainId` returns a result over WSS. Verifies WebSocket is not blocked by proxies. |
+| `wss_subscribe` *(publicnode, drpc only)* | `eth_subscribe newHeads` returns a subscription ID and at least one block event. Verifies real-time subscription works end-to-end. |
+
+---
+
+#### Category 2 — Execution Boot Nodes (Section 2)
+
+These are Ethereum Foundation-operated **devp2p boot nodes** for the execution layer. Their purpose is DiscV4 peer discovery — they maintain a list of execution peers and respond to discovery queries. They are full nodes configured and optimized for discoverability, not regular user-facing nodes. All 4 generate 3 probes each (P2P TCP, DiscV4 UDP, and RLPx).
+
+| Target | Operator | IP | Region |
+|---|---|---|---|
+| EF-ap-southeast | Ethereum Foundation | 18.138.108.67 | AWS ap-southeast-1 (Singapore) |
+| EF-us-east | Ethereum Foundation | 3.209.45.79 | AWS us-east-1 (Virginia) |
+| EF-hetzner-hel | Ethereum Foundation | 65.108.70.101 | Hetzner Helsinki |
+| EF-hetzner-fsn | Ethereum Foundation | 157.90.35.166 | Hetzner Falkenstein |
+
+**Probes generated per boot node and what they verify:**
+
+| Probe | Verifies |
+|---|---|
+| `p2p_tcp_connect` (port 30303) | TCP:30303 is reachable. If TCP:443 works but this fails, it indicates **selective port blocking of Ethereum execution P2P** — the most fundamental form of censorship targeting node operators. |
+| `discv4_ping` (UDP port 30303) | A DiscV4 PING datagram (secp256k1-signed) receives a PONG response. Verifies that UDP:30303 is reachable and the DiscV4 discovery protocol works end-to-end. UDP being blocked while TCP:30303 works indicates asymmetric filtering. |
+| `rlpx_handshake` (TCP port 30303) | An EIP-8 ECIES-encrypted RLPx auth packet is sent and the remote responds (with data, FIN, or RST). Any response = the packet was not DPI-filtered. A **timeout** (while TCP connects) means a DPI firewall is specifically identifying and dropping RLPx auth packets — the most targeted execution-layer censorship. RST = normal rejection of unknown identity, not censorship. |
+
+---
+
+#### Category 3 — DNS Comparison Targets (Section 2)
+
+These are domain names queried against two resolvers simultaneously: the system resolver and Cloudflare DoH (1.1.1.1). No connection is made beyond the DNS query.
+
+| Target | Type |
+|---|---|
+| ethereum-rpc.publicnode.com | Execution RPC provider |
+| cloudflare-eth.com | Execution RPC provider |
+| eth.llamarpc.com | Execution RPC provider |
+| eth.drpc.org | Execution RPC provider |
+| ethereum-beacon-api.publicnode.com | Consensus API provider |
+| lodestar-mainnet.chainsafe.io | Consensus API provider |
+
+**Probe generated:**
+
+| Probe | Verifies |
+|---|---|
+| `dns_compare` | The system resolver (ISP's resolver) returns the same set of IP addresses as Cloudflare DoH. If they differ, it means the ISP's resolver is returning different IPs for Ethereum-related domains — active DNS manipulation. The mismatch is the censorship signal, not the specific IPs returned. |
+
+---
+
+#### Category 4 — Consensus Boot Nodes (Section 3, static)
+
+These are **libp2p/DiscV5 boot nodes** for the Ethereum consensus layer. Like execution boot nodes, their purpose is peer discovery. They are configured as discovery-only infrastructure and deliberately block inbound TCP:9000 (libp2p connections). Each generates only 1 probe.
+
+| Target | Client | Operator | IP | tcp4 in ENR |
+|---|---|---|---|---|
+| teku-aws-ohio | Teku (Java) | Consensys | 3.147.37.0 | 9000 (firewalled) |
+| teku-aws-sydney | Teku (Java) | Consensys | 3.107.124.68 | 9000 (firewalled) |
+| nimbus-frankfurt | Nimbus (Nim) | Status | 3.120.104.18 | 9100 (Prometheus port) |
+
+**Probe generated:**
+
+| Probe | Verifies |
+|---|---|
+| `beacon_discv5_ping` | A DiscV5 PING datagram receives a PONG. Verifies that UDP:9000 is reachable and the DiscV5 consensus peer discovery protocol works end-to-end. Failing here means consensus peer discovery is blocked — the node cannot find peers to connect to. |
+
+> **Why no TCP/libp2p to these?** These boot nodes deliberately block inbound TCP:9000 (by design, not misconfiguration). Probing them for TCP/libp2p always returns a known constant result (connection refused or wrong port). TCP and libp2p probes now target Category 6 (live peer nodes) instead.
+
+---
+
+#### Category 5 — Beacon API Nodes (Section 3)
+
+These are consensus nodes that expose the standard Beacon REST API. They serve the same role as execution RPC providers but for the consensus layer. Additionally, they are the **source** of Category 6 live peer targets.
+
+| Target | Client | Operator | URL |
+|---|---|---|---|
+| publicnode | Unknown | Public Node, Inc. | ethereum-beacon-api.publicnode.com |
+| chainsafe-lodestar | Lodestar (TypeScript) | ChainSafe Systems | lodestar-mainnet.chainsafe.io |
+
+**Probes generated:**
+
+| Probe | Verifies |
+|---|---|
+| `beacon_https` | `GET /eth/v1/node/version` returns HTTP 200 with a JSON body containing the client name and version. Verifies that the Beacon REST API is accessible — needed by light clients, checkpoint sync, and monitoring tools. |
+| *(indirect)* live peer fetch | Before running probes, `GET /eth/v1/node/peers?state=connected` is called to discover Category 6 targets. Each outbound peer generates 2 probes (see below). |
+
+---
+
+#### Category 6 — Consensus Peer Nodes (Section 3, dynamic)
+
+These are **real consensus full nodes** discovered live at runtime from the Beacon API. Unlike boot nodes (Category 4), these nodes participate fully in block propagation and attestation gossip. They have been confirmed reachable by the beacon API nodes (the API node connected TO them — `direction=outbound`), so they have publicly routable IPs and open ports. The set changes every run depending on who is currently connected.
+
+| Source | Typical count | Peer diversity |
+|---|---|---|
+| publicnode peers | ~130 unique outbound peers | Global; data center nodes and staking infrastructure |
+| chainsafe-lodestar peers | ~3 unique outbound peers | Global; Lodestar has fewer stable outbound connections |
+
+These are a mix of:
+- **Validator nodes**: running a beacon client + validator keys; externally identical to sync nodes
+- **Non-validating sync nodes**: archiving or providing data
+- **Staking pool infrastructure**: Rocket Pool, Lido, etc.
+- **Client team nodes**: Lighthouse, Prysm, Teku, Nimbus, Lodestar team-operated nodes
+
+**Probes generated per live peer:**
+
+| Probe | Target | Verifies |
+|---|---|---|
+| `beacon_tcp_connect` | `IP:PORT` from peer's multiaddr | TCP:9000 (or whatever port the peer advertises) is reachable from the prober's location. If the beacon node can reach the peer but the prober cannot, it indicates selective blocking of that IP:port from the prober's ISP. |
+| `libp2p_handshake` | Same `IP:PORT` | The remote speaks the libp2p multistream-select protocol. Sends `/multistream/1.0.0` and `/noise`, checks for acknowledgement. Verifies the peer is a real libp2p node and that the multistream protocol bytes are not being filtered by DPI. A timeout here (TCP connects but no response) is the signature of **libp2p-specific DPI filtering** — the most targeted form of consensus censorship. |
+
+---
+
+#### Summary: probe count per run
+
+| Category | Targets | Probes each | Total probes |
+|---|---|---|---|
+| 1 — RPC providers (base) | 8 | 5 (`dns_resolve`, `tcp_connect`, `tls_handshake`, `https_jsonrpc`, `https_jsonrpc_write`) | 40 |
+| 1 — RPC providers (WSS) | 2 (publicnode, drpc) | 2 extra (`wss_jsonrpc`, `wss_subscribe`) | 4 |
+| 2 — Execution boot nodes | 4 | 3 (`p2p_tcp_connect`, `discv4_ping`, `rlpx_handshake`) | 12 |
+| 3 — DNS compare | 6 | 1 (`dns_compare`) | 6 |
+| 4 — Consensus boot nodes | 3 | 1 (`beacon_discv5_ping`) | 3 |
+| 5 — Beacon API nodes | 2 | 1 (`beacon_https`) | 2 |
+| 6 — Live consensus peers | ~133 (varies) | 2 (`beacon_tcp_connect`, `libp2p_handshake`) | ~266 |
+| **Total** | | | **~333** |
 
 ---
 
