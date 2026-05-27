@@ -161,3 +161,39 @@ async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
                     )
 
     return True
+
+
+# ---------------------------------------------------------------------------
+# Map data query (for future MapLibre integration)
+# ---------------------------------------------------------------------------
+
+async def fetch_geo_reports(pool: asyncpg.Pool, limit: int = 1000) -> list[dict]:
+    """Return recent reports with geo data, aggregated with probe ok/fail counts.
+
+    Intended for the /api/geo-reports endpoint consumed by MapLibre.
+    Only returns reports from the last 12 months that have valid coordinates.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                r.geo_latitude       AS lat,
+                r.geo_longitude      AS lon,
+                r.geo_country_iso    AS country_iso,
+                r.geo_country_name   AS country_name,
+                r.geo_city_name      AS city_name,
+                r.received_at,
+                COUNT(pr.id) FILTER (WHERE pr.ok = TRUE)  AS ok_count,
+                COUNT(pr.id) FILTER (WHERE pr.ok = FALSE) AS fail_count
+            FROM reports r
+            LEFT JOIN probe_runs pr ON pr.report_id = r.id
+            WHERE r.geo_latitude  IS NOT NULL
+              AND r.geo_longitude IS NOT NULL
+              AND r.received_at  >= NOW() - INTERVAL '1 year'
+            GROUP BY r.id
+            ORDER BY r.received_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+    return [dict(r) for r in rows]

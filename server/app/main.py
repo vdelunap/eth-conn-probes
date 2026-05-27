@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from .db import close_pool, create_pool, get_pool
 from .geoip import lookup_ip
-from .storage import insert_report
+from .storage import fetch_geo_reports, insert_report
 
 # 512 KB is far more than any legitimate report will ever be
 MAX_BODY_BYTES = 512 * 1024
@@ -102,6 +102,32 @@ async def report(request: Request):
     # 6. Persist
     inserted = await insert_report(body, get_pool())
     return {"ok": True, "new": inserted}
+
+
+# ---------------------------------------------------------------------------
+# Map data endpoint (ready for MapLibre — not yet wired to the app)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/geo-reports")
+@limiter.limit("30/minute")
+async def geo_reports(request: Request):
+    rows = await fetch_geo_reports(get_pool())
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
+            "properties": {
+                "country_iso":  r["country_iso"],
+                "country_name": r["country_name"],
+                "city_name":    r["city_name"],
+                "received_at":  r["received_at"].isoformat(),
+                "ok_count":     r["ok_count"],
+                "fail_count":   r["fail_count"],
+            },
+        }
+        for r in rows
+    ]
+    return {"type": "FeatureCollection", "features": features}
 
 
 # ---------------------------------------------------------------------------
