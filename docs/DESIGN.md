@@ -611,14 +611,26 @@ The app generates and persists a `client_id` UUID in AppData on first launch. Th
 
 ### 6.5 Report Collector Server
 
-Docker Compose stack: Postgres 16 + Rust HTTP server.
-- `POST /report`: Accepts JSON reports from CLI and Tauri clients. Intended for GeoIP enrichment and storage.
-- `GET /ping`: Health check → `ok`.
+Docker Compose stack: Postgres 16-alpine + FastAPI/uvicorn HTTP server.
 
-The Postgres instance is internal-only (no exposed port). The server mounts a GeoIP database for server-side location attribution.
+**Endpoints:**
+- `POST /report`: Accepts JSON reports from CLI and Tauri clients. Validates, enriches with GeoIP (MaxMind GeoLite2), and persists.
+- `GET /ping`: Health check → `ok`.
+- `GET /api/geo-reports`: Returns a GeoJSON `FeatureCollection` of the last 12 months of reports with coordinates. Intended for future MapLibre map display in the app (not yet wired to the app).
+
+**Database (`dbalfa`):**
+- Postgres 16-alpine, exposed on port **15432** (host) → 5432 (container). Tuned for 1 GB droplet: `shared_buffers=128MB`, `work_mem=4MB`, `max_connections=20`.
+- Three roles: `ethprobes` (full access to `ethconnprobes` schema — used by the app), `admin` (Docker `POSTGRES_USER`, superuser), `dbuser` (read-only — for psql/pgAdmin inspection).
+- Passwords are never in environment variables. `admin` password is set via Docker secret (`pgfile`) mounted as `POSTGRES_PASSWORD_FILE`. All role passwords are set in `server/secrets/postgres/auth.sql` via `ALTER USER ... WITH PASSWORD`, applied by `init/dbinit.sh` after schema creation.
+- Schema (`base.sql`) is initialised first, then passwords applied (`auth.sql`). Users are created without passwords in `base.sql`; `auth.sql` only sets them.
+- App connects via **PGSERVICEFILE**: `server/secrets/postgres/pgs` is mounted as a Docker secret and its path exported as `PGSERVICEFILE` in the app container. The `[main]` service in `pgs` points to the internal Compose hostname `postgres:5432` with `user=ethprobes` and `options=-csearch_path=ethconnprobes`.
+- For local access (psql/pgAdmin), copy `server/pg_service.conf` to `%APPDATA%\postgresql\pg_service.conf` (Windows) and set `PGSERVICEFILE` to that path permanently (System Properties → Environment Variables). Services `main`, `admin`, and `dbuser` point to the server at port 15432.
+
+**GeoIP:** Two MaxMind GeoLite2 `.mmdb` files (`GeoLite2-City.mmdb`, `GeoLite2-ASN.mmdb`) must be placed in `server/geoip/` and are mounted read-only at `/geoip` inside the container. If the files are absent, GeoIP fields are stored as `NULL` (non-fatal).
 
 ### 6.6 Data Model
 
+**Client-side (Rust structs → JSON payload):**
 ```
 Report
 ├── run_id: UUID
@@ -628,7 +640,7 @@ Report
 ├── run: RunConfig { attempts, min_successes, timeout_ms, parallelism }
 └── results: Vec<ProbeRun>
     └── ProbeRun
-        ├── kind: ProbeKind
+        ├── kind: ProbeKind (snake_case string)
         ├── target: String (human-readable label)
         ├── attempts: Vec<AttemptResult>
         │   └── AttemptResult { ok, rtt_ms, error, meta: JSON }
@@ -636,6 +648,18 @@ Report
 ```
 
 `ok` in `ProbeSummary` is `true` iff `success_count >= min_successes` (default: 1 out of 3 attempts).
+
+**Server-side (PostgreSQL schema `ethconnprobes`):**
+
+All tables live in the `ethconnprobes` schema. The Python app sets `search_path=ethconnprobes` on the connection pool, so queries use unqualified names.
+
+```
+ethconnprobes.reports          — one row per submitted run (unique on run_id)
+ethconnprobes.probe_runs       — one row per (kind × target) within a report
+ethconnprobes.probe_attempts   — one row per individual attempt; meta stored as JSONB
+```
+
+The `kind` column is plain `TEXT`, so new `ProbeKind` variants require no schema migration — they are stored as their snake_case string representation.
 
 ### 6.7 Retry and Parallelism Mechanism
 

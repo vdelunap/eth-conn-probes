@@ -178,13 +178,13 @@ pub fn default_config() -> Config {
         },
         reporting: ReportingConfig {
             enabled: true,
-            report_url: "http://46.101.227.140:8080/report".to_string(),
+            report_url: "http://46.101.227.140:8000/report".to_string(),
             timeout_ms: 5000,
         },
         probes: ProbesConfig {
             control_http: ControlHttpProbe {
                 enabled: false,
-                url: "http://46.101.227.140:8080/ping".to_string(),
+                url: "http://46.101.227.140:8000/ping".to_string(),
                 expect_body: Some("ok".to_string()),
             },
 

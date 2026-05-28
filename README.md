@@ -191,12 +191,12 @@ client_id      = ""    # Set by Tauri app; leave empty for CLI
 
 [reporting]
 enabled    = true
-report_url = "http://<server>:8080/report"
+report_url = "http://<server>:8000/report"
 timeout_ms = 5000
 
 [probes.control_http]
 enabled     = false
-url         = "http://<server>:8080/ping"
+url         = "http://<server>:8000/ping"
 expect_body = "ok"
 
 [[probes.tcp]]            # Auto-generates dns_resolve + tcp_connect + tls_handshake

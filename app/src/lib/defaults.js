@@ -10,12 +10,12 @@ app_channel = "app"
 
 [reporting]
 enabled = true
-report_url = "http://46.101.227.140:8080/report"
+report_url = "http://46.101.227.140:8000/report"
 timeout_ms = 3000
 
 [probes.control_http]
 enabled = true
-url = "http://46.101.227.140:8080/ping"
+url = "http://46.101.227.140:8000/ping"
 expect_body = "ok"
 
 [[probes.tcp]]
