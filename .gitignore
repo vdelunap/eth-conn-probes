@@ -17,6 +17,9 @@ desktop.ini
 .env.*
 !.env.example
 
+# Docker secrets directory — files go to the server but never to git
+server/secrets/
+
 # -------------------------
 # VSCode (keep tracked configs)
 # -------------------------
