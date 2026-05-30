@@ -57,11 +57,7 @@ impl super::ProbeFn for BeaconHttpsProbe {
                             "api_error",
                         ),
                     },
-                    _ => (
-                        false,
-                        Some(format!("HTTP {status}")),
-                        "http_error",
-                    ),
+                    _ => (false, Some(format!("HTTP {status}")), "http_error"),
                 };
 
                 model::AttemptResult {

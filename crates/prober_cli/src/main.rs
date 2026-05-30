@@ -42,7 +42,12 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if cfg.reporting.enabled && !no_send {
-                prober_core::reporting::send_report(&report, &cfg.reporting.report_url, cfg.reporting.timeout_ms).await?;
+                prober_core::reporting::send_report(
+                    &report,
+                    &cfg.reporting.report_url,
+                    cfg.reporting.timeout_ms,
+                )
+                .await?;
             }
         }
         Command::PrintDefaultConfig => {

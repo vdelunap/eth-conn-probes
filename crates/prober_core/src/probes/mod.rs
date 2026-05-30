@@ -106,9 +106,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::HttpsJsonRpcWrite,
             target_label: format!("{} ({})", t.url, t.name),
-            run: Arc::new(https_jsonrpc_write::HttpsJsonRpcWriteProbe {
-                url: t.url.clone(),
-            }),
+            run: Arc::new(https_jsonrpc_write::HttpsJsonRpcWriteProbe { url: t.url.clone() }),
         });
     }
 
@@ -126,9 +124,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::WssSubscribe,
             target_label: format!("{} ({})", t.url, t.name),
-            run: Arc::new(wss_subscribe::WssSubscribeProbe {
-                url: t.url.clone(),
-            }),
+            run: Arc::new(wss_subscribe::WssSubscribeProbe { url: t.url.clone() }),
         });
     }
 
@@ -224,8 +220,11 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
 pub async fn run_jobs(run_cfg: &config::RunConfig, jobs: Vec<ProbeJob>) -> Vec<model::ProbeRun> {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(run_cfg.parallelism));
     // Store (kind, target) alongside the handle so panics can be surfaced.
-    let mut handles: Vec<(model::ProbeKind, String, tokio::task::JoinHandle<model::ProbeRun>)> =
-        Vec::new();
+    let mut handles: Vec<(
+        model::ProbeKind,
+        String,
+        tokio::task::JoinHandle<model::ProbeRun>,
+    )> = Vec::new();
 
     for job in jobs {
         let kind = job.kind.clone();
@@ -235,24 +234,28 @@ pub async fn run_jobs(run_cfg: &config::RunConfig, jobs: Vec<ProbeJob>) -> Vec<m
         let min_successes = run_cfg.min_successes;
         let timeout_ms = run_cfg.timeout_ms;
 
-        handles.push((kind, target, tokio::spawn(async move {
-            let _permit = sem.acquire().await.expect("semaphore");
-            let mut attempt_results = Vec::new();
+        handles.push((
+            kind,
+            target,
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await.expect("semaphore");
+                let mut attempt_results = Vec::new();
 
-            for _ in 0..attempts {
-                let r = job.run.run(timeout_ms).await;
-                attempt_results.push(r);
-            }
+                for _ in 0..attempts {
+                    let r = job.run.run(timeout_ms).await;
+                    attempt_results.push(r);
+                }
 
-            let summary = model::summarize_attempts(&attempt_results, min_successes);
+                let summary = model::summarize_attempts(&attempt_results, min_successes);
 
-            model::ProbeRun {
-                kind: job.kind,
-                target: job.target_label,
-                attempts: attempt_results,
-                summary,
-            }
-        })));
+                model::ProbeRun {
+                    kind: job.kind,
+                    target: job.target_label,
+                    attempts: attempt_results,
+                    summary,
+                }
+            }),
+        ));
     }
 
     let mut out = Vec::new();

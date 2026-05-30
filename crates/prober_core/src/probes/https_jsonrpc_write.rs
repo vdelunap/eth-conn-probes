@@ -48,24 +48,31 @@ impl super::ProbeFn for HttpsJsonRpcWriteProbe {
                 // Some providers (e.g. Flashbots) return HTTP 400 with a JSON error body
                 // instead of HTTP 200 + JSON-RPC error. Both prove the write endpoint is
                 // alive and processing requests — only network-level failures are censorship.
-                let (ok, error, category) =
-                    if let Some(v) = parsed.as_ref().ok() {
-                        if v.get("error").is_some() || v.get("result").is_some() {
-                            (true, None, "ok")
-                        } else {
-                            (false, Some(format!("unexpected body (HTTP {status})")), "api_error")
-                        }
+                let (ok, error, category) = if let Some(v) = parsed.as_ref().ok() {
+                    if v.get("error").is_some() || v.get("result").is_some() {
+                        (true, None, "ok")
                     } else {
-                        match status {
-                            401 | 403 => (
-                                false,
-                                Some(format!("auth required (HTTP {status})")),
-                                "auth_required",
-                            ),
-                            429 => (false, Some("rate limited (HTTP 429)".into()), "rate_limited"),
-                            _ => (false, Some(format!("HTTP {status}")), "http_error"),
-                        }
-                    };
+                        (
+                            false,
+                            Some(format!("unexpected body (HTTP {status})")),
+                            "api_error",
+                        )
+                    }
+                } else {
+                    match status {
+                        401 | 403 => (
+                            false,
+                            Some(format!("auth required (HTTP {status})")),
+                            "auth_required",
+                        ),
+                        429 => (
+                            false,
+                            Some("rate limited (HTTP 429)".into()),
+                            "rate_limited",
+                        ),
+                        _ => (false, Some(format!("HTTP {status}")), "http_error"),
+                    }
+                };
 
                 model::AttemptResult {
                     ok,

@@ -41,7 +41,6 @@ pub struct ProbesConfig {
     pub wss_jsonrpc: Vec<JsonRpcTarget>,
 
     // --- Execution layer P2P ---
-
     /// TCP connect probes to Ethereum execution boot nodes on port 30303.
     #[serde(default)]
     pub p2p_boot_nodes: Vec<TcpTarget>,
@@ -62,7 +61,6 @@ pub struct ProbesConfig {
     pub dns_compare: Vec<DnsCompareTarget>,
 
     // --- Consensus layer (Beacon chain) ---
-
     /// DiscV5 pings to consensus boot nodes (ENR format, port 9000).
     /// When the discv5 feature is enabled, ip4/tcp4 fields are also extracted from
     /// these ENRs to generate beacon_tcp_connect and libp2p_handshake probes.

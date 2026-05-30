@@ -72,7 +72,11 @@ impl super::ProbeFn for WssSubscribeProbe {
                 model::AttemptResult {
                     ok: confirmed,
                     rtt_ms: Some(model::now_ms().saturating_sub(started)),
-                    error: if confirmed { None } else { Some("subscription ID not returned".into()) },
+                    error: if confirmed {
+                        None
+                    } else {
+                        Some("subscription ID not returned".into())
+                    },
                     meta,
                 }
             }

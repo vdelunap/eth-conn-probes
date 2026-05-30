@@ -112,8 +112,14 @@ pub fn summarize_attempts(attempts: &[AttemptResult], min_successes: u32) -> Pro
     let mut rtts: Vec<u128> = Vec::new();
 
     for a in attempts {
-        if a.ok { ok_count += 1; } else { fail_count += 1; }
-        if let Some(rtt) = a.rtt_ms { rtts.push(rtt); }
+        if a.ok {
+            ok_count += 1;
+        } else {
+            fail_count += 1;
+        }
+        if let Some(rtt) = a.rtt_ms {
+            rtts.push(rtt);
+        }
     }
 
     rtts.sort_unstable();

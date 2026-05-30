@@ -99,7 +99,10 @@ async fn fetch_from(url: &str, source_name: &str, timeout_ms: u64) -> Vec<(Strin
     let data = match body.get("data").and_then(|d| d.as_array()) {
         Some(d) => d,
         None => {
-            tracing::warn!(source = source_name, "beacon_peers: unexpected response shape");
+            tracing::warn!(
+                source = source_name,
+                "beacon_peers: unexpected response shape"
+            );
             return vec![];
         }
     };
@@ -127,11 +130,19 @@ async fn fetch_from(url: &str, source_name: &str, timeout_ms: u64) -> Vec<(Strin
 
         if let Some((host, port)) = parse_multiaddr(addr) {
             if !is_non_routable(&host) {
-                out.push((host.clone(), port, format!("{host}:{port} ({source_name} peer)")));
+                out.push((
+                    host.clone(),
+                    port,
+                    format!("{host}:{port} ({source_name} peer)"),
+                ));
             }
         }
     }
-    tracing::debug!(source = source_name, count = out.len(), "beacon_peers: fetched inbound");
+    tracing::debug!(
+        source = source_name,
+        count = out.len(),
+        "beacon_peers: fetched inbound"
+    );
     out
 }
 
@@ -167,6 +178,9 @@ pub async fn fetch_all(cfg: &config::Config, timeout_ms: u64) -> Vec<LivePeer> {
         }
     }
 
-    tracing::info!(total = peers.len(), "beacon_peers: unique peers after dedup");
+    tracing::info!(
+        total = peers.len(),
+        "beacon_peers: unique peers after dedup"
+    );
     peers
 }

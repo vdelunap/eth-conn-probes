@@ -25,8 +25,8 @@ use ctr::Ctr128BE;
 use hmac::{Hmac, Mac};
 use k256::{ecdh::EphemeralSecret, ecdsa::SigningKey, elliptic_curve::sec1::ToEncodedPoint};
 use rand::{rngs::OsRng, RngCore};
-use sha3::{Digest, Keccak256};
 use sha2::Sha256;
+use sha3::{Digest, Keccak256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -49,7 +49,10 @@ fn parse_enode(enode: &str) -> anyhow::Result<([u8; 64], String, u16)> {
     let addr = &rest[at + 1..];
 
     if pubkey_hex.len() != 128 {
-        anyhow::bail!("enode pubkey must be 128 hex chars, got {}", pubkey_hex.len());
+        anyhow::bail!(
+            "enode pubkey must be 128 hex chars, got {}",
+            pubkey_hex.len()
+        );
     }
     let mut pubkey = [0u8; 64];
     for (i, b) in pubkey.iter_mut().enumerate() {
@@ -80,11 +83,7 @@ fn parse_enode(enode: &str) -> anyhow::Result<([u8; 64], String, u16)> {
 //   output = ecies_pubkey(65) || IV(16) || ciphertext || MAC(32)
 // ---------------------------------------------------------------------------
 
-fn ecies_encrypt(
-    remote_pubkey: &[u8; 64],
-    plaintext: &[u8],
-    s2: &[u8],
-) -> anyhow::Result<Vec<u8>> {
+fn ecies_encrypt(remote_pubkey: &[u8; 64], plaintext: &[u8], s2: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut rng = OsRng;
 
     let mut remote_full = [0u8; 65];
@@ -116,8 +115,8 @@ fn ecies_encrypt(
         .map_err(|e| anyhow::anyhow!("aes-ctr init: {e}"))?
         .apply_keystream(&mut ciphertext);
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(&mac_key)
-        .map_err(|e| anyhow::anyhow!("hmac init: {e}"))?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(&mac_key).map_err(|e| anyhow::anyhow!("hmac init: {e}"))?;
     mac.update(&iv);
     mac.update(&ciphertext);
     mac.update(s2);
