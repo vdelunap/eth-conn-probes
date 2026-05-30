@@ -1,0 +1,197 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # Step 1: create the draft GitHub Release and share its ID
+  # ─────────────────────────────────────────────────────────────
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: create
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '')
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              tag_name: tag,
+              name: `conneth ${tag}`,
+              body: [
+                '## Downloads',
+                '',
+                '### Desktop App',
+                '| Platform | Installer |',
+                '|----------|-----------|',
+                '| Linux    | `conneth_*_amd64.deb`, `conneth_*.AppImage` |',
+                '| Windows  | `conneth_*_x64-setup.exe` |',
+                '| macOS    | `conneth_*.dmg` (Universal — Intel + Apple Silicon) |',
+                '',
+                '### CLI (`conneth_cli`)',
+                '| Platform | Binary |',
+                '|----------|--------|',
+                '| Linux x86_64   | `conneth_cli-linux-x86_64` |',
+                '| Linux aarch64  | `conneth_cli-linux-aarch64` |',
+                '| Windows x86_64 | `conneth_cli-windows-x86_64.exe` |',
+                '| macOS x86_64   | `conneth_cli-macos-x86_64` |',
+                '| macOS aarch64  | `conneth_cli-macos-aarch64` |',
+              ].join('\n'),
+              draft: true,
+              prerelease: false,
+            })
+            return data.id
+
+  # ─────────────────────────────────────────────────────────────
+  # Step 2a: build the Tauri desktop app for each platform
+  # ─────────────────────────────────────────────────────────────
+  build-tauri:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            rust-targets: ''
+            tauri-args: ''
+          - platform: windows-latest
+            rust-targets: ''
+            tauri-args: ''
+          - platform: macos-latest
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+            tauri-args: '--target universal-apple-darwin'
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          key: tauri-${{ matrix.platform }}
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: app
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          projectPath: app
+          args: ${{ matrix.tauri-args }}
+
+  # ─────────────────────────────────────────────────────────────
+  # Step 2b: build the CLI binary for each target
+  # ─────────────────────────────────────────────────────────────
+  build-cli:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bin: prober_cli
+            asset: conneth_cli-linux-x86_64
+
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            bin: prober_cli
+            asset: conneth_cli-linux-aarch64
+            cross-pkg: gcc-aarch64-linux-gnu
+            cross-linker: aarch64-linux-gnu-gcc
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: prober_cli.exe
+            asset: conneth_cli-windows-x86_64.exe
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bin: prober_cli
+            asset: conneth_cli-macos-x86_64
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: prober_cli
+            asset: conneth_cli-macos-aarch64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+          key: cli-${{ matrix.target }}
+
+      - name: Install AArch64 cross-linker
+        if: matrix.cross-pkg != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.cross-pkg }}
+
+      - name: Build CLI
+        run: cargo build --release -p prober_cli --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross-linker }}
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+          gh release upload "${{ github.ref_name }}" "${{ matrix.asset }}" --clobber
+
+  # ─────────────────────────────────────────────────────────────
+  # Step 3: all builds done → publish the draft release
+  # ─────────────────────────────────────────────────────────────
+  publish-release:
+    needs: [create-release, build-tauri, build-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              draft: false,
+            })

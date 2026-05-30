@@ -66,8 +66,10 @@ app/**/*.log
 # Rust artifacts under src-tauri (some setups build here)
 app/src-tauri/target/
 
-# Generated mobile native projects + schemas/etc
-app/src-tauri/gen/
+# Mobile native projects are committed; only exclude intermediate build artifacts
+app/src-tauri/gen/android/app/build/
+app/src-tauri/gen/android/.gradle/
+app/src-tauri/gen/android/buildSrc/.gradle/
 
 # Optional/legacy tauri dirs
 app/src-tauri/.tauri/
