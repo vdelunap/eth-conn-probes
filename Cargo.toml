@@ -5,3 +5,9 @@ members = [
   "crates/prober_cli",
   "app/src-tauri"
 ]
+
+# Reduces local disk usage: no 6 GB incremental cache, lighter debug symbols.
+# Revert both lines if step-through debugging in a debugger becomes necessary.
+[profile.dev]
+incremental = false
+debug = 1
