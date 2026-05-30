@@ -3,10 +3,10 @@
 /// Protocol flow (EIP-8 / devp2p spec):
 ///   1. TCP connect to the boot node IP:port from enode://.
 ///   2. Build auth-body: RLP([sig(65), eph_pubkey(64), nonce(32), version=4])
-///        sig = ECDSA_recoverable(keccak256(static_shared XOR nonce), our_ephemeral_key)
-///        static_shared = ECDH(our_static_key, remote_pubkey).x_coord
+///      sig = ECDSA_recoverable(keccak256(static_shared XOR nonce), our_ephemeral_key)
+///      static_shared = ECDH(our_static_key, remote_pubkey).x_coord
 ///   3. ECIES-encrypt auth-body with the remote's public key (parsed from enode://).
-///        ECIES: ephemeral ECDH → KDF (SHA-256) → AES-128-CTR + HMAC-SHA256.
+///      ECIES: ephemeral ECDH → KDF (SHA-256) → AES-128-CTR + HMAC-SHA256.
 ///   4. Prepend uint16_BE(len) → auth packet.
 ///   5. Send packet; wait for any response from remote.
 ///
