@@ -31,7 +31,10 @@ impl super::ProbeFn for WssJsonRpcProbe {
                     let msg = e.to_string();
                     let category = if msg.contains("refused") {
                         "network"
-                    } else if msg.contains("dns") || msg.contains("resolve") || msg.contains("lookup") {
+                    } else if msg.contains("dns")
+                        || msg.contains("resolve")
+                        || msg.contains("lookup")
+                    {
                         "dns_error"
                     } else if msg.contains("403") || msg.contains("401") {
                         "auth_required"

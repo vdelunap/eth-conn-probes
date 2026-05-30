@@ -3,8 +3,8 @@ use anyhow::Context;
 pub mod config;
 pub mod model;
 pub mod probes;
-pub mod rlp;
 pub mod reporting;
+pub mod rlp;
 
 pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
     // When both ring and aws-lc-rs are compiled in (reqwest pulls aws-lc-rs),

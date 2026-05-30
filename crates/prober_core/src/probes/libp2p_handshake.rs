@@ -79,9 +79,7 @@ impl super::ProbeFn for LibP2pHandshakeProbe {
 
             // Step 4: read response.
             let noise_resp = read_ms_line(&mut stream).await.unwrap_or_default();
-            let noise_accepted = noise_resp
-                .windows(b"/noise".len())
-                .any(|w| w == b"/noise");
+            let noise_accepted = noise_resp.windows(b"/noise".len()).any(|w| w == b"/noise");
 
             Ok(serde_json::json!({
                 "is_libp2p":     true,

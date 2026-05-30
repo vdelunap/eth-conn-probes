@@ -62,15 +62,9 @@ impl super::ProbeFn for HttpsJsonRpcProbe {
                         // returned an application-level error, e.g. method not allowed).
                         Some(v) if v.get("error").is_some() => {
                             let err_obj = &v["error"];
-                            let msg = err_obj["message"]
-                                .as_str()
-                                .unwrap_or("unknown error");
+                            let msg = err_obj["message"].as_str().unwrap_or("unknown error");
                             let code = err_obj["code"].as_i64().unwrap_or(0);
-                            (
-                                false,
-                                Some(format!("RPC error {code}: {msg}")),
-                                "rpc_error",
-                            )
+                            (false, Some(format!("RPC error {code}: {msg}")), "rpc_error")
                         }
                         // Response is 200 but the body is not valid JSON or missing fields.
                         _ => (
@@ -80,11 +74,7 @@ impl super::ProbeFn for HttpsJsonRpcProbe {
                         ),
                     },
                     // Any other HTTP error (5xx server errors, etc.).
-                    _ => (
-                        false,
-                        Some(format!("HTTP {status}")),
-                        "http_error",
-                    ),
+                    _ => (false, Some(format!("HTTP {status}")), "http_error"),
                 };
 
                 model::AttemptResult {

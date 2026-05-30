@@ -61,13 +61,15 @@ impl super::ProbeFn for TlsHandshakeProbe {
                 .and_then(|certs| certs.first())
                 .and_then(|der| {
                     use x509_parser::prelude::*;
-                    X509Certificate::from_der(der.as_ref()).ok().map(|(_, cert)| {
-                        serde_json::json!({
-                            "subject": cert.subject().to_string(),
-                            "issuer":  cert.issuer().to_string(),
-                            "not_after": cert.validity().not_after.to_string(),
+                    X509Certificate::from_der(der.as_ref())
+                        .ok()
+                        .map(|(_, cert)| {
+                            serde_json::json!({
+                                "subject": cert.subject().to_string(),
+                                "issuer":  cert.issuer().to_string(),
+                                "not_after": cert.validity().not_after.to_string(),
+                            })
                         })
-                    })
                 })
                 .unwrap_or(serde_json::Value::Null);
 
