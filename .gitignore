@@ -29,6 +29,11 @@ server/secrets/
 !.vscode/tasks.json
 !.vscode/launch.json
 
+# -------------------------
+# VSCode (keep tracked configs)
+# -------------------------
+.vs/*
+
 # JetBrains
 .idea/
 *.iml
