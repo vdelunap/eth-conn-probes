@@ -23,6 +23,7 @@ jobs:
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '')
+            const isPrerelease = tag.includes('-')
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo:  context.repo.repo,
@@ -53,7 +54,7 @@ jobs:
                 '| macOS aarch64  | `conneth_cli-macos-aarch64` |',
               ].join('\n'),
               draft: true,
-              prerelease: false,
+              prerelease: isPrerelease,
             })
             return data.id
 
