@@ -61,8 +61,8 @@ fn is_non_routable(host: &str) -> bool {
     h.starts_with("127.")
         || h.starts_with("10.")
         || h.starts_with("192.168.")
-        || (h.starts_with("172.") && second_octet().map_or(false, |n| (16..=31).contains(&n)))
-        || (h.starts_with("100.") && second_octet().map_or(false, |n| (64..=127).contains(&n)))
+        || (h.starts_with("172.") && second_octet().is_some_and(|n| (16..=31).contains(&n)))
+        || (h.starts_with("100.") && second_octet().is_some_and(|n| (64..=127).contains(&n)))
         || h == "::1"
         || h.starts_with("fe80:")
         || h.starts_with("fc00:")

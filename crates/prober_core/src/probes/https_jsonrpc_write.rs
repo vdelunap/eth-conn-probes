@@ -48,7 +48,7 @@ impl super::ProbeFn for HttpsJsonRpcWriteProbe {
                 // Some providers (e.g. Flashbots) return HTTP 400 with a JSON error body
                 // instead of HTTP 200 + JSON-RPC error. Both prove the write endpoint is
                 // alive and processing requests — only network-level failures are censorship.
-                let (ok, error, category) = if let Some(v) = parsed.as_ref().ok() {
+                let (ok, error, category) = if let Ok(v) = parsed.as_ref() {
                     if v.get("error").is_some() || v.get("result").is_some() {
                         (true, None, "ok")
                     } else {
