@@ -3,6 +3,9 @@
 # Scoped to avoid hiding unrelated folders.
 # =========================================================
 
+# Only for me
+presentation.html
+
 # -------------------------
 # OS junk
 # -------------------------
