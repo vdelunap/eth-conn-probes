@@ -40,7 +40,6 @@ impl super::ProbeFn for WssSubscribeProbe {
                     anyhow::anyhow!("[{cat}] {msg}")
                 })?;
 
-            // Send eth_subscribe for newHeads.
             let sub_req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -49,9 +48,8 @@ impl super::ProbeFn for WssSubscribeProbe {
             });
             ws.send(Message::Text(sub_req.to_string().into())).await?;
 
-            // Wait for the subscription confirmation.
-            // Success = result field contains the subscription ID string.
-            // We do NOT wait for a block notification (block time ~12s > typical timeout).
+            // The subscription ID in `result` is enough. Waiting for an actual newHeads
+            // notification would need ~12s, well past the usual timeout.
             while let Some(msg) = ws.next().await {
                 let msg = msg?;
                 if let Message::Text(txt) = msg {

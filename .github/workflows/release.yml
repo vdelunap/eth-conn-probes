@@ -37,7 +37,7 @@ jobs:
                 '|----------|-----------|',
                 '| Linux    | `conneth_*_amd64.deb`, `conneth_*.AppImage` |',
                 '| Windows  | `conneth_*_x64-setup.exe` |',
-                '| macOS    | `conneth_*.dmg` (Universal — Intel + Apple Silicon) |',
+                '| macOS    | `conneth_*.dmg` (Universal: Intel + Apple Silicon) |',
                 '',
                 '### Android',
                 '| File | Notes |',

@@ -1,23 +1,13 @@
-/// RLPx ECIES authentication handshake probe (TCP:30303).
-///
-/// Protocol flow (EIP-8 / devp2p spec):
-///   1. TCP connect to the boot node IP:port from enode://.
-///   2. Build auth-body: RLP([sig(65), eph_pubkey(64), nonce(32), version=4])
-///      sig = ECDSA_recoverable(keccak256(static_shared XOR nonce), our_ephemeral_key)
-///      static_shared = ECDH(our_static_key, remote_pubkey).x_coord
-///   3. ECIES-encrypt auth-body with the remote's public key (parsed from enode://).
-///      ECIES: ephemeral ECDH → KDF (SHA-256) → AES-128-CTR + HMAC-SHA256.
-///   4. Prepend uint16_BE(len) → auth packet.
-///   5. Send packet; wait for any response from remote.
-///
-/// Success condition:
-///   - Remote sends data (auth-ack or disconnect): clearly ok.
-///   - Remote closes with EOF or RST after receiving auth: also ok. Boot nodes always
-///     reject our ephemeral identity (no persistent node ID), but any response proves
-///     the auth packet traversed the network and was processed — no DPI filtering.
-///   - Timeout with no response: FAIL. A DPI firewall drops the auth packet before
-///     it reaches the remote, so no response arrives. This is the only genuine failure
-///     mode that indicates RLPx-specific censorship on an otherwise-open TCP port.
+// RLPx ECIES auth handshake over TCP:30303, per EIP-8.
+//
+// Connect to the enode's IP:port, build auth-body
+// RLP([sig(65), eph_pubkey(64), nonce(32), version=4]), ECIES-encrypt it under the
+// remote's pubkey, prefix uint16_BE(len), send, then wait for anything back.
+//
+// Any reaction counts as success: auth-ack, disconnect, FIN or RST. Boot nodes always
+// reject our throwaway identity, but a reply means the packet reached them. Only a
+// timeout is a real failure: that is what DPI filtering of RLPx looks like on a port
+// that is otherwise open.
 use crate::{model, rlp};
 use aes::Aes128;
 use cipher::{KeyIvInit, StreamCipher};
@@ -33,10 +23,6 @@ use tokio::net::TcpStream;
 pub struct RlpxHandshakeProbe {
     pub enode: String,
 }
-
-// ---------------------------------------------------------------------------
-// enode:// parsing
-// ---------------------------------------------------------------------------
 
 fn parse_enode(enode: &str) -> anyhow::Result<([u8; 64], String, u16)> {
     let rest = enode
@@ -71,18 +57,13 @@ fn parse_enode(enode: &str) -> anyhow::Result<([u8; 64], String, u16)> {
     Ok((pubkey, host, port))
 }
 
-// ---------------------------------------------------------------------------
-// ECIES encryption (go-ethereum crypto/ecies compatible)
-//
-// Implements: ECIES_AES128_SHA256
-//   KDF:    K = SHA256([0,0,0,1] || ECDH_shared_x)
-//   enc_key = K[0:16]
-//   mac_key = SHA256(K[16:32])   ← go-ethereum double-hashes the mac portion
+// ECIES_AES128_SHA256, matching go-ethereum's crypto/ecies:
+//   K          = SHA256([0,0,0,1] || ECDH_shared_x)
+//   enc_key    = K[0:16]
+//   mac_key    = SHA256(K[16:32])        (geth hashes the mac half a second time)
 //   ciphertext = AES-128-CTR(enc_key, IV, plaintext)
-//   MAC = HMAC-SHA256(mac_key, IV || ciphertext || s2)
-//   output = ecies_pubkey(65) || IV(16) || ciphertext || MAC(32)
-// ---------------------------------------------------------------------------
-
+//   MAC        = HMAC-SHA256(mac_key, IV || ciphertext || s2)
+//   output     = ecies_pubkey(65) || IV(16) || ciphertext || MAC(32)
 fn ecies_encrypt(remote_pubkey: &[u8; 64], plaintext: &[u8], s2: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut rng = OsRng;
 
@@ -99,13 +80,12 @@ fn ecies_encrypt(remote_pubkey: &[u8; 64], plaintext: &[u8], s2: &[u8]) -> anyho
     let shared = ecies_secret.diffie_hellman(&remote_pk);
     let z = shared.raw_secret_bytes(); // x-coordinate, 32 bytes
 
-    // KDF: K = SHA256([0,0,0,1] || z)
     let mut kdf_in = [0u8; 36];
     kdf_in[3] = 1;
     kdf_in[4..].copy_from_slice(z.as_slice());
     let k = Sha256::digest(kdf_in);
     let enc_key = &k[..16];
-    let mac_key = Sha256::digest(&k[16..]); // go-ethereum hashes the mac portion again
+    let mac_key = Sha256::digest(&k[16..]);
 
     let mut iv = [0u8; 16];
     rng.fill_bytes(&mut iv);
@@ -130,35 +110,27 @@ fn ecies_encrypt(remote_pubkey: &[u8; 64], plaintext: &[u8], s2: &[u8]) -> anyho
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// EIP-8 auth packet builder
-// ---------------------------------------------------------------------------
-
 fn build_auth_packet(remote_pubkey: &[u8; 64]) -> anyhow::Result<Vec<u8>> {
     let mut rng = OsRng;
 
-    // Build remote PublicKey for ECDH
     let mut remote_full = [0u8; 65];
     remote_full[0] = 0x04;
     remote_full[1..].copy_from_slice(remote_pubkey);
     let remote_pk = k256::PublicKey::from_sec1_bytes(&remote_full)
         .map_err(|e| anyhow::anyhow!("invalid remote pubkey: {e}"))?;
 
-    // Our "static" key: random per-probe, used only to compute static-shared-secret.
-    // In a real node this would be the persistent identity key; for a connectivity probe
-    // a fresh key is sufficient — the remote cannot reject us solely on the static pubkey.
+    // A real node would use its persistent identity key here; a fresh one per probe is
+    // fine, since the remote can't reject us on the static pubkey alone.
     let our_static = EphemeralSecret::random(&mut rng);
     let static_shared = our_static.diffie_hellman(&remote_pk);
     let static_shared_bytes = static_shared.raw_secret_bytes();
 
-    // Nonce: 32 random bytes
     let mut nonce = [0u8; 32];
     rng.fill_bytes(&mut nonce);
 
-    // Ephemeral signing key (per EIP-8: initiator-ephemeral-pubkey goes into auth body)
     let eph_key = SigningKey::random(&mut rng);
     let eph_pk_encoded = eph_key.verifying_key().to_encoded_point(false);
-    let eph_pk_raw = &eph_pk_encoded.as_bytes()[1..]; // 64 bytes, drop 0x04 prefix
+    let eph_pk_raw = &eph_pk_encoded.as_bytes()[1..]; // drop the 0x04 prefix
 
     // sig = ECDSA_recoverable(keccak256(static_shared XOR nonce), ephemeral_key)
     let mut xor_buf = [0u8; 32];
@@ -173,7 +145,6 @@ fn build_auth_packet(remote_pubkey: &[u8; 64]) -> anyhow::Result<Vec<u8>> {
     sig_bytes[..64].copy_from_slice(&sig.to_bytes());
     sig_bytes[64] = rec_id.to_byte();
 
-    // auth-body = RLP([sig(65), eph_pubkey(64), nonce(32), version=4])
     let auth_body = rlp::rlp_list(&[
         rlp::rlp_bytes(&sig_bytes),
         rlp::rlp_bytes(eph_pk_raw),
@@ -181,24 +152,18 @@ fn build_auth_packet(remote_pubkey: &[u8; 64]) -> anyhow::Result<Vec<u8>> {
         rlp::rlp_uint(4),
     ]);
 
-    // auth-size = len of the ECIES-encrypted payload (known before encryption):
-    //   65 (ecies pubkey) + 16 (IV) + auth_body.len() + 32 (MAC)
+    // The ciphertext length is known up front: pubkey(65) + IV(16) + body + MAC(32).
+    // EIP-8 wants it both as the size prefix and as ECIES shared_info2.
     let ecies_len = 65 + 16 + auth_body.len() + 32;
     let auth_size_be = (ecies_len as u16).to_be_bytes();
 
-    // ECIES-encrypt, passing auth-size as shared_info2 (s2) per EIP-8
     let ecies_ct = ecies_encrypt(remote_pubkey, &auth_body, &auth_size_be)?;
 
-    // Packet: uint16_BE(ecies_len) || ecies_ct
     let mut packet = Vec::with_capacity(2 + ecies_ct.len());
     packet.extend_from_slice(&auth_size_be);
     packet.extend_from_slice(&ecies_ct);
     Ok(packet)
 }
-
-// ---------------------------------------------------------------------------
-// Probe
-// ---------------------------------------------------------------------------
 
 #[async_trait::async_trait]
 impl super::ProbeFn for RlpxHandshakeProbe {
@@ -223,15 +188,13 @@ impl super::ProbeFn for RlpxHandshakeProbe {
                 .await
                 .map_err(|e| anyhow::anyhow!("write_auth: {e}"))?;
 
-            // Wait for any response. Use read() (not read_exact) so that EOF and RST
-            // are also treated as success: any reaction from the remote proves the auth
-            // packet reached it. Boot nodes always reject our ephemeral identity via
-            // FIN (EOF) or RST, but that is identity rejection, not DPI filtering.
+            // read(), not read_exact(): EOF and RST count too, they still prove the
+            // auth packet arrived.
             let mut buf = [0u8; 256];
             let response = match stream.read(&mut buf).await {
-                Ok(0) => "remote_closed", // FIN — remote received auth, closed gracefully
-                Ok(_) => "ack_received",  // data — auth-ack or disconnect message
-                Err(_) => "remote_reset", // RST — remote received auth, abrupt close
+                Ok(0) => "remote_closed", // FIN
+                Ok(_) => "ack_received",  // auth-ack or disconnect
+                Err(_) => "remote_reset", // RST
             };
 
             Ok::<serde_json::Value, anyhow::Error>(serde_json::json!({
@@ -264,7 +227,7 @@ impl super::ProbeFn for RlpxHandshakeProbe {
             Err(_) => model::AttemptResult {
                 ok: false,
                 rtt_ms: None,
-                error: Some("rlpx handshake timed out — auth packet may be DPI-filtered".into()),
+                error: Some("rlpx handshake timed out; auth packet may be DPI-filtered".into()),
                 meta: serde_json::json!({"category": "timeout"}),
             },
         }

@@ -22,7 +22,6 @@ impl super::ProbeFn for DnsResolveProbe {
             Ok(Ok(iter)) => {
                 let addrs: Vec<String> = iter.map(|a| a.to_string()).collect();
                 if addrs.is_empty() {
-                    // DNS query succeeded but returned no address records.
                     model::AttemptResult {
                         ok: false,
                         rtt_ms: Some(model::now_ms().saturating_sub(started)),

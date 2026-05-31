@@ -1,5 +1,4 @@
 export type ProbeKind =
-  // RPC provider availability
   | 'dns_resolve'
   | 'tcp_connect'
   | 'tls_handshake'
@@ -8,13 +7,11 @@ export type ProbeKind =
   | 'https_json_rpc_write'
   | 'wss_json_rpc'
   | 'wss_subscribe'
-  // Execution layer P2P
   | 'p2p_tcp_connect'
   | 'dns_compare'
   | 'discv5_ping'
   | 'discv4_ping'
   | 'rlpx_handshake'
-  // Consensus layer (Beacon chain)
   | 'beacon_discv5_ping'
   | 'beacon_tcp_connect'
   | 'lib_p2p_handshake'
@@ -46,12 +43,14 @@ export type ProbeRun = {
 export type ClientInfo = {
   os: string
   arch: string
-  location_label: string
+  client_id: string
   app_channel: string
+  network_label?: string
 }
 
 export type Report = {
   run_id: string
+  timestamp: string
   started_at_ms: number
   finished_at_ms: number
   client: ClientInfo
@@ -67,8 +66,32 @@ export type Report = {
 export type SendOutcome =
   | { kind: 'sent' }
   | { kind: 'queued'; reason: string }
+  | { kind: 'skipped' }
 
 export type RunResponse = {
   report: Report
   send: SendOutcome
+}
+
+// ok_count/fail_count are relative to whatever probe-kind filter was applied.
+export type GeoFeatureProperties = {
+  country_iso: string | null
+  country_name: string | null
+  city_name: string | null
+  network_label: string | null
+  received_at: string
+  ok_count: number
+  fail_count: number
+  total: number
+}
+
+export type GeoFeature = {
+  type: 'Feature'
+  geometry: { type: 'Point'; coordinates: [number, number] }
+  properties: GeoFeatureProperties
+}
+
+export type GeoFeatureCollection = {
+  type: 'FeatureCollection'
+  features: Array<GeoFeature>
 }

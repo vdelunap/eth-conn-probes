@@ -14,10 +14,8 @@ DEFAULT_ASN_DB = Path("/geoip/GeoLite2-ASN.mmdb")
 
 @dataclass
 class GeoResult:
-    """Normalized GeoIP result for storage.
+    """The subset of the MaxMind model we actually store."""
 
-    We keep it small and stable (not the full MaxMind model).
-    """
     country_iso: Optional[str]
     country_name: Optional[str]
     region_name: Optional[str]
@@ -50,9 +48,10 @@ def _asn_reader() -> Optional[geoip2.database.Reader]:
 
 
 def lookup_ip(ip: str) -> Optional[dict]:
-    """Lookup an IP address in GeoLite2 databases (offline).
+    """Resolve an IP against the local GeoLite2 databases.
 
-    Returns a dict ready to embed in your report or None if not available.
+    Returns None when neither database is mounted; otherwise a dict with whatever
+    fields could be filled in.
     """
     city = _city_reader()
     asn = _asn_reader()
@@ -81,7 +80,6 @@ def lookup_ip(ip: str) -> Optional[dict]:
             out.country_name = _safe_str(r.country.name)
             out.city_name = _safe_str(r.city.name)
 
-            # subdivisions may be empty
             if r.subdivisions and len(r.subdivisions) > 0:
                 out.region_name = _safe_str(r.subdivisions.most_specific.name)
 
@@ -93,7 +91,6 @@ def lookup_ip(ip: str) -> Optional[dict]:
         except geoip2.errors.AddressNotFoundError:
             pass
         except Exception:
-            # You might log this in real life.
             pass
 
     if asn is not None:

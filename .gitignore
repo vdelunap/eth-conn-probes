@@ -1,5 +1,5 @@
 # =========================================================
-# eth-conn-probes — Rust workspace + Tauri app/ + Python server/
+# eth-conn-probes: Rust workspace + Tauri app/ + Python server/
 # Scoped to avoid hiding unrelated folders.
 # =========================================================
 
@@ -20,7 +20,7 @@ desktop.ini
 .env.*
 !.env.example
 
-# Docker secrets directory — files go to the server but never to git
+# Docker secrets directory: files go to the server but never to git
 server/secrets/
 
 # -------------------------

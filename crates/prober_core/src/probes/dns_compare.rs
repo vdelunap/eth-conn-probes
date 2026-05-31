@@ -11,9 +11,8 @@ impl super::ProbeFn for DnsCompareProbe {
         let started = model::now_ms();
         let timeout = std::time::Duration::from_millis(timeout_ms);
 
-        // --- Step 1: Resolve with the system resolver ---
-        // This uses whatever DNS server the OS is configured to use.
-        // In countries with DNS-based censorship, this may be poisoned or blocked.
+        // Whatever resolver the OS is pointed at, i.e. the one that gets poisoned
+        // or blocked where DNS censorship is in play.
         let addr_str = format!("{}:443", self.host);
         let system_result = tokio::time::timeout(timeout, lookup_host(&addr_str)).await;
 
@@ -22,35 +21,28 @@ impl super::ProbeFn for DnsCompareProbe {
             _ => Vec::new(),
         };
 
-        // --- Step 2: Resolve with Cloudflare DoH (DNS-over-HTTPS at 1.1.1.1) ---
-        // DoH sends the DNS query encrypted over HTTPS to 1.1.1.1.
-        // It bypasses the local/ISP resolver entirely, so poisoning won't affect it.
+        // The same query encrypted over HTTPS, skipping the local/ISP resolver entirely.
         let doh_ips = query_doh_cloudflare(&self.host, timeout_ms).await;
 
         let rtt_ms = model::now_ms().saturating_sub(started);
 
-        // --- Step 3: Compare and categorise ---
         let (ok, error, category) = match (system_ips.is_empty(), doh_ips.is_empty()) {
-            // Both resolvers returned nothing — general DNS failure (not necessarily censorship).
+            // Neither worked: a plain DNS failure, not necessarily censorship.
             (true, true) => (
                 false,
                 Some("DNS resolution failed on both system and DoH".to_string()),
                 "dns_failure",
             ),
-            // System resolver returned nothing but DoH succeeded —
-            // strong signal that the local/ISP resolver is blocking this domain.
+            // DoH resolves what the local resolver won't: that's a block.
             (true, false) => (
                 false,
                 Some(format!(
-                    "System DNS returned nothing (DoH resolved: {}) — DNS block suspected",
+                    "System DNS returned nothing (DoH resolved: {}); DNS block suspected",
                     doh_ips.join(", ")
                 )),
                 "dns_block",
             ),
-            // System resolved OK (DoH also resolved, or DoH was unreachable).
-            // Note: IP sets often differ legitimately due to CDN anycast routing —
-            // a mismatch alone does NOT indicate poisoning without further analysis.
-            // Both IP sets are stored in meta for the server to analyse.
+            // System resolver worked, so nothing is being blocked here.
             (false, _) => (true, None, "ok"),
         };
 
@@ -62,8 +54,8 @@ impl super::ProbeFn for DnsCompareProbe {
                 "category": category,
                 "system_ips": system_ips,
                 "doh_ips": doh_ips,
-                // Flag for server-side analysis: IPs differ between resolvers.
-                // May indicate CDN (normal) or DNS poisoning (suspicious).
+                // Disagreeing resolvers are usually just CDN anycast, occasionally
+                // poisoning. Both sets go to the server so it can tell them apart.
                 "ip_mismatch": !system_ips.is_empty()
                     && !doh_ips.is_empty()
                     && !system_ips.iter().any(|ip| doh_ips.contains(ip)),
@@ -72,13 +64,8 @@ impl super::ProbeFn for DnsCompareProbe {
     }
 }
 
-/// Queries Cloudflare's DNS-over-HTTPS endpoint for A records of the given host.
-///
-/// Returns a list of IPv4 addresses, or an empty list if the query fails or
-/// the host doesn't resolve.
+/// A records for `host` from Cloudflare's DoH endpoint. Empty on any failure.
 async fn query_doh_cloudflare(host: &str, timeout_ms: u64) -> Vec<String> {
-    // Build a reqwest client. We set a short timeout so a blocked DoH endpoint
-    // doesn't stall the whole probe.
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(timeout_ms))
         .build()
@@ -87,7 +74,6 @@ async fn query_doh_cloudflare(host: &str, timeout_ms: u64) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
-    // The DNS-over-HTTPS JSON API: returns A records for the requested hostname.
     let url = format!("https://1.1.1.1/dns-query?name={}&type=A", host);
 
     let resp = match client
@@ -105,12 +91,12 @@ async fn query_doh_cloudflare(host: &str, timeout_ms: u64) -> Vec<String> {
         Err(_) => return Vec::new(),
     };
 
-    // Status 0 = NOERROR. Anything else means the domain doesn't resolve.
+    // 0 is NOERROR; anything else means the name doesn't resolve.
     if json["Status"].as_u64() != Some(0) {
         return Vec::new();
     }
 
-    // Extract IP addresses from the Answer section (type 1 = A record).
+    // Type 1 answers are A records.
     json["Answer"]
         .as_array()
         .map(|arr| {

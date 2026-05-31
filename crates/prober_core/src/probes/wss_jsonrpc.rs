@@ -23,11 +23,9 @@ impl super::ProbeFn for WssJsonRpcProbe {
         }
 
         let fut = async {
-            // Connect and perform the WebSocket handshake.
             let (mut ws, _resp) = tokio_tungstenite::connect_async(url_str)
                 .await
                 .map_err(|e| {
-                    // Classify the connection error so the frontend can show a useful reason.
                     let msg = e.to_string();
                     let category = if msg.contains("refused") {
                         "network"
@@ -43,11 +41,10 @@ impl super::ProbeFn for WssJsonRpcProbe {
                     } else {
                         "network"
                     };
-                    // Encode category in the error string so the outer match can read it.
+                    // Tagged so the outer match can recover the category.
                     anyhow::anyhow!("[{category}] {msg}")
                 })?;
 
-            // Send a JSON-RPC request over the WebSocket connection.
             let payload = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -56,7 +53,6 @@ impl super::ProbeFn for WssJsonRpcProbe {
             });
             ws.send(Message::Text(payload.to_string().into())).await?;
 
-            // Read frames until we get a text response.
             while let Some(msg) = ws.next().await {
                 let msg = msg?;
                 if let Message::Text(txt) = msg {
@@ -68,7 +64,6 @@ impl super::ProbeFn for WssJsonRpcProbe {
         };
 
         match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut).await {
-            // Got a response — check whether it is a valid JSON-RPC result.
             Ok(Ok(v)) => {
                 let (ok, error, category) = if v.get("result").is_some() {
                     (true, None, "ok")
@@ -87,10 +82,8 @@ impl super::ProbeFn for WssJsonRpcProbe {
                     meta: serde_json::json!({ "category": category, "response": v }),
                 }
             }
-            // Connection or protocol-level failure.
             Ok(Err(e)) => {
                 let msg = e.to_string();
-                // Extract the category tag we encoded in the error string above.
                 let (category, error) = if let Some(rest) = msg.strip_prefix('[') {
                     if let Some(end) = rest.find(']') {
                         let cat = &rest[..end];
@@ -109,7 +102,6 @@ impl super::ProbeFn for WssJsonRpcProbe {
                     meta: serde_json::json!({ "category": category }),
                 }
             }
-            // Tokio timeout — probe took longer than timeout_ms.
             Err(_) => model::AttemptResult {
                 ok: false,
                 rtt_ms: None,

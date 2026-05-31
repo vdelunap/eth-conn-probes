@@ -5,26 +5,25 @@ timeout_ms   = 5000
 parallelism  = 16
 
 [client]
-# location_label is informational only; the server derives actual location from IP.
-location_label = ""
+network_label = ""
 app_channel    = "cli"
 client_id      = ""
 
 [reporting]
 enabled    = true
-# TODO: replace with real server IP once deployed to DigitalOcean
 report_url = "http://46.101.227.140:8000/report"
 timeout_ms = 5000
 
+# Off by default: this only checks that the collector itself is up, which is
+# noise unless you are debugging the collector.
 [probes.control_http]
-# Disabled until the server is deployed.
 enabled      = false
 url          = "http://46.101.227.140:8000/ping"
 expect_body  = "ok"
 
 # ---------------------------------------------------------------------------
-# TCP targets — each entry generates a DNS resolve probe AND a TCP connect
-# probe automatically.  All providers use port 443 (HTTPS/TLS).
+# TCP targets: each entry expands into dns_resolve + tcp_connect + tls_handshake.
+# All providers are on 443.
 # ---------------------------------------------------------------------------
 
 [[probes.tcp]]
@@ -68,7 +67,7 @@ host = "eth-mainnet.public.blastapi.io"
 port = 443
 
 # ---------------------------------------------------------------------------
-# HTTPS JSON-RPC — sends eth_chainId and checks the response has a "result".
+# HTTPS JSON-RPC. Expands into https_json_rpc + https_json_rpc_write.
 # ---------------------------------------------------------------------------
 
 [[probes.https_jsonrpc]]
@@ -112,7 +111,8 @@ url    = "https://eth-mainnet.public.blastapi.io"
 method = "eth_chainId"
 
 # ---------------------------------------------------------------------------
-# WSS JSON-RPC — only providers with confirmed public WebSocket endpoints.
+# WSS JSON-RPC. Expands into wss_json_rpc + wss_subscribe.
+# Only the providers with a confirmed public WebSocket endpoint.
 # ---------------------------------------------------------------------------
 
 [[probes.wss_jsonrpc]]
@@ -126,9 +126,9 @@ url    = "wss://eth.drpc.org"
 method = "eth_chainId"
 
 # ---------------------------------------------------------------------------
-# P2P boot nodes — TCP connect to port 30303 (RLPx + DiscV5).
-# If this port is blocked while 443 works → selective Ethereum P2P censorship.
-# Source: go-ethereum params/bootnodes.go (mainnet MainnetBootnodes).
+# P2P boot nodes: TCP connect to 30303. Blocked here but open on 443 means
+# Ethereum P2P is being singled out.
+# Source: go-ethereum params/bootnodes.go (MainnetBootnodes).
 # ---------------------------------------------------------------------------
 
 [[probes.p2p_boot_nodes]]
@@ -153,10 +153,9 @@ host = "157.90.35.166"
 port = 30303
 
 # ---------------------------------------------------------------------------
-# RLPx targets — ECIES auth handshake to execution boot nodes on TCP:30303.
-# Requires the rlpx Cargo feature.  The enode:// URL embeds the 64-byte
-# secp256k1 public key needed for ECIES encryption of the auth message.
-# IPs and pubkeys are Ethereum Foundation boot nodes (go-ethereum bootnodes.go).
+# RLPx targets: ECIES auth handshake on TCP:30303. Needs the rlpx feature.
+# Same nodes as above, but as enode:// URLs: ECIES needs the 64-byte secp256k1
+# pubkey that the enode carries and a bare host:port does not.
 # ---------------------------------------------------------------------------
 
 [[probes.rlpx_targets]]
@@ -177,8 +176,8 @@ name  = "EF-hetzner-fsn"
 enode = "enode://4aeb4ab6c14b23e2c4cfdce879c04b0748a20d8e9b59e25ded2a08143e265c6c25936e74cbc8e641e3312ca288673d91f2f93f8e277de3cfa444ecdaaf982052@157.90.35.166:30303"
 
 # ---------------------------------------------------------------------------
-# DNS comparison — system resolver vs Cloudflare DoH (1.1.1.1).
-# System returns nothing but DoH succeeds → DNS block suspected.
+# DNS comparison: system resolver vs Cloudflare DoH. DoH resolving what the
+# system resolver won't points at a DNS block.
 # ---------------------------------------------------------------------------
 
 [[probes.dns_compare]]
@@ -206,10 +205,8 @@ name = "beacon-chainsafe"
 host = "lodestar-mainnet.chainsafe.io"
 
 # ---------------------------------------------------------------------------
-# DiscV4 execution — UDP ping to execution boot nodes on port 30303.
-# Tests discv4 peer discovery separately from TCP reachability.
-# Same IPs as p2p_boot_nodes.  TCP blocked + UDP open = selective TCP block.
-# UDP blocked = execution P2P discovery is fully unreachable.
+# DiscV4 execution: UDP ping to the same IPs as p2p_boot_nodes, to separate
+# peer discovery from plain TCP reachability. Needs the discv4 feature.
 # ---------------------------------------------------------------------------
 
 [[probes.discv4_execution]]
@@ -233,14 +230,12 @@ host = "157.90.35.166"
 port = 30303
 
 # ---------------------------------------------------------------------------
-# DiscV5 consensus — ping consensus boot nodes via DiscV5 v5 (UDP:9000).
-# These ENRs generate ONLY DiscV5 ping probes. BeaconTcpConnect and
-# LibP2pHandshake are generated dynamically from live Beacon API peers
-# at runtime (beacon_peers::fetch_all). See DESIGN.md §11.4 and §12.0.
+# DiscV5 consensus: UDP:9000 pings, discv5 feature. These ENRs produce pings
+# and nothing else: the beacon TCP and libp2p targets come from live Beacon API
+# peers at runtime instead (beacon_peers::fetch_all).
 # ---------------------------------------------------------------------------
 
-# Teku (ConsenSys) — tcp4=9000 advertised; TCP:9000 firewalled (discovery-only boot nodes).
-# See DESIGN.md §11.4b for all evaluated candidates and removal rationale.
+# Teku advertises tcp4=9000 but firewalls it, so these are discovery-only nodes.
 [[probes.discv5_consensus]]
 name = "teku-aws-ohio"
 enr  = "enr:-Iu4QLm7bZGdAt9NSeJG0cEnJohWcQTQaI9wFLu3Q7eHIDfrI4cwtzvEW3F3VbG9XdFXlrHyFGeXPn9snTCQJ9bnMRABgmlkgnY0gmlwhAOTJQCJc2VjcDI1NmsxoQIZdZD6tDYpkpEfVo5bgiU8MGRjhcOmHGD2nErK0UKRrIN0Y3CCIyiDdWRwgiMo"
@@ -249,15 +244,15 @@ enr  = "enr:-Iu4QLm7bZGdAt9NSeJG0cEnJohWcQTQaI9wFLu3Q7eHIDfrI4cwtzvEW3F3VbG9XdFX
 name = "teku-aws-sydney"
 enr  = "enr:-Iu4QEDJ4Wa_UQNbK8Ay1hFEkXvd8psolVK6OhfTL9irqz3nbXxxWyKwEplPfkju4zduVQj6mMhUCm9R2Lc4YM5jPcIBgmlkgnY0gmlwhANrfESJc2VjcDI1NmsxoQJCYz2-nsqFpeEj6eov9HSi9QssIVIVNr0I89J1vXM9foN0Y3CCIyiDdWRwgiMo"
 
-# Nimbus (Status) — tcp4=9100 (Prometheus metrics, not libp2p); DiscV5 OK.
+# Nimbus advertises tcp4=9100, which is Prometheus rather than libp2p. DiscV5 works.
 [[probes.discv5_consensus]]
 name = "nimbus-frankfurt"
 enr  = "enr:-LK4QA8FfhaAjlb_BXsXxSfiysR7R52Nhi9JBt4F8SPssu8hdE1BXQQEtVDC3qStCW60LSO7hEsVHv5zm8_6Vnjhcn0Bh2F0dG5ldHOIAAAAAAAAAACEZXRoMpC1MD8qAAAAAP__________gmlkgnY0gmlwhAN4aBKJc2VjcDI1NmsxoQJerDhsJ-KxZ8sHySMOCmTO6sHM3iCFQ6VMvLTe948MyYN0Y3CCI4yDdWRwgiOM"
 
 # ---------------------------------------------------------------------------
-# Beacon HTTPS — GET /eth/v1/node/version on public beacon REST API nodes.
-# Tests whether consensus-layer data is reachable over HTTPS (port 443).
-# Uses providers with confirmed public endpoints that require no API key.
+# Beacon HTTPS: GET /eth/v1/node/version, i.e. consensus data over 443.
+# These endpoints are public and need no API key. They double as the source of
+# live peers for the beacon TCP and libp2p probes.
 # ---------------------------------------------------------------------------
 
 [[probes.beacon_https]]

@@ -47,7 +47,7 @@ pub trait ProbeFn {
 pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
     let mut jobs: Vec<ProbeJob> = Vec::new();
 
-    // ---- Section 1: RPC provider availability ----
+    // ---- RPC provider availability ----
 
     if cfg.probes.control_http.enabled {
         let url = cfg.probes.control_http.url.clone();
@@ -62,7 +62,6 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // Each TCP target generates: DNS resolve + TCP connect + TLS handshake.
     for t in &cfg.probes.tcp {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::DnsResolve,
@@ -92,7 +91,6 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // Each https_jsonrpc target generates: JSON-RPC read + JSON-RPC write probes.
     for t in &cfg.probes.https_jsonrpc {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::HttpsJsonRpc,
@@ -110,7 +108,6 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // Each wss_jsonrpc target generates: WSS JSON-RPC + WSS subscribe probes.
     for t in &cfg.probes.wss_jsonrpc {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::WssJsonRpc,
@@ -128,20 +125,18 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // DiscV5 pings to execution layer boot nodes (ENRs on port 30303).
-    // Empty by default — execution nodes advertise enode://, not enr:-.
+    // Empty by default: execution nodes advertise enode://, not enr:-.
     #[cfg(feature = "discv5")]
     for t in &cfg.probes.discv5_execution {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::Discv5Ping,
-            target_label: format!("{} ({})", &t.enr, &t.name),
+            target_label: format!("{} ({})", t.enr, t.name),
             run: Arc::new(discv5_ping::Discv5PingProbe { enr: t.enr.clone() }),
         });
     }
 
-    // ---- Section 2: Ethereum execution layer P2P ----
+    // ---- Execution layer P2P ----
 
-    // TCP connect to execution boot nodes on port 30303.
     for t in &cfg.probes.p2p_boot_nodes {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::P2pTcpConnect,
@@ -153,7 +148,6 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // DiscV4 UDP ping to execution boot nodes on port 30303.
     #[cfg(feature = "discv4")]
     for t in &cfg.probes.discv4_execution {
         jobs.push(ProbeJob {
@@ -166,8 +160,6 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // RLPx ECIES auth handshake to execution boot nodes on port 30303.
-    // Proves the RLPx transport layer is reachable (TCP open + RLPx not filtered by DPI).
     #[cfg(feature = "rlpx")]
     for t in &cfg.probes.rlpx_targets {
         jobs.push(ProbeJob {
@@ -179,7 +171,6 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // DNS comparison: system resolver vs Cloudflare DoH (1.1.1.1).
     for t in &cfg.probes.dns_compare {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::DnsCompare,
@@ -190,22 +181,19 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
         });
     }
 
-    // ---- Section 3: Ethereum consensus layer (Beacon chain) ----
+    // ---- Consensus layer (Beacon chain) ----
 
-    // DiscV5 pings to consensus boot nodes (ENRs on port 9000).
-    // Boot nodes are discovery-only infrastructure — they deliberately block inbound TCP:9000.
-    // BeaconTcpConnect and LibP2pHandshake probes are NOT generated from ENRs here;
-    // they are generated dynamically from live peers fetched via beacon_peers::fetch_all().
+    // Only pings: consensus boot nodes are discovery-only and block inbound TCP:9000.
+    // The beacon TCP and libp2p jobs come from build_live_peer_jobs instead.
     #[cfg(feature = "discv5")]
     for t in &cfg.probes.discv5_consensus {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::BeaconDiscv5Ping,
-            target_label: format!("{} ({})", &t.enr, &t.name),
+            target_label: format!("{} ({})", t.enr, t.name),
             run: Arc::new(discv5_ping::Discv5PingProbe { enr: t.enr.clone() }),
         });
     }
 
-    // HTTP GET to public beacon chain REST API endpoints.
     for t in &cfg.probes.beacon_https {
         jobs.push(ProbeJob {
             kind: model::ProbeKind::BeaconHttps,
@@ -219,7 +207,7 @@ pub fn build_jobs(cfg: &config::Config) -> anyhow::Result<Vec<ProbeJob>> {
 
 pub async fn run_jobs(run_cfg: &config::RunConfig, jobs: Vec<ProbeJob>) -> Vec<model::ProbeRun> {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(run_cfg.parallelism));
-    // Store (kind, target) alongside the handle so panics can be surfaced.
+    // (kind, target) travel next to the handle so a panicked task can still be reported.
     let mut handles: Vec<(
         model::ProbeKind,
         String,
@@ -263,8 +251,7 @@ pub async fn run_jobs(run_cfg: &config::RunConfig, jobs: Vec<ProbeJob>) -> Vec<m
         match h.await {
             Ok(r) => out.push(r),
             Err(e) => {
-                // Task panicked or was cancelled — surface it as a failed result
-                // so it appears in the report instead of being silently dropped.
+                // Panicked or cancelled: report it as a failure rather than dropping it.
                 tracing::error!("probe task panicked: kind={kind:?} target={target} err={e}");
                 out.push(model::ProbeRun {
                     kind,
@@ -290,7 +277,7 @@ pub async fn run_jobs(run_cfg: &config::RunConfig, jobs: Vec<ProbeJob>) -> Vec<m
     out
 }
 
-/// Build TCP + libp2p probe jobs for each live peer returned by fetch_all().
+/// One TCP job and one libp2p job per live peer.
 pub fn build_live_peer_jobs(peers: Vec<beacon_peers::LivePeer>) -> Vec<ProbeJob> {
     let mut jobs = Vec::with_capacity(peers.len() * 2);
     for peer in peers {
@@ -314,21 +301,12 @@ pub fn build_live_peer_jobs(peers: Vec<beacon_peers::LivePeer>) -> Vec<ProbeJob>
     jobs
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 #[cfg(feature = "discv5")]
 mod tests {
-    /// Diagnostic: decode active consensus boot node ENRs and print ip/tcp/udp fields.
-    /// Used to inspect what fields are available in each ENR before probing.
-    /// Run with:
+    /// Dumps the ip/tcp/udp fields of the consensus boot node ENRs. Not an assertion,
+    /// just a way to see what a boot node actually advertises:
     ///   cargo test -p prober_core --features discv5 -- enr_decode --nocapture
-    ///
-    /// Note: BeaconTcpConnect and LibP2pHandshake are no longer derived from ENRs
-    /// in production — they are generated dynamically from live Beacon API peers.
-    /// This test remains as a diagnostic tool for understanding ENR structure.
     #[test]
     fn enr_decode() {
         let enrs = [
@@ -340,7 +318,7 @@ mod tests {
         for (name, enr_str) in &enrs {
             let result = enr_str.parse::<discv5::enr::Enr<discv5::enr::CombinedKey>>();
             match result {
-                Err(e) => println!("{name}: PARSE FAILED — {e}"),
+                Err(e) => println!("{name}: PARSE FAILED: {e}"),
                 Ok(enr) => {
                     println!(
                         "{name}: ip4={:?}  ip6={:?}  tcp4={:?}  tcp6={:?}  udp4={:?}  udp6={:?}",

@@ -1,15 +1,8 @@
-/// libp2p multistream-select negotiation probe (TCP:9000).
-///
-/// Protocol flow:
-///   1. TCP connect to host:port (typically 9000 for consensus nodes).
-///   2. Write:  [varint(19)] + "/multistream/1.0.0\n"  → 20 bytes total.
-///   3. Read:   varint-prefixed response from remote.
-///   4. If remote echoed "/multistream/1.0.0\n" → it is a live libp2p node (probe ok).
-///   5. Write:  [varint(7)]  + "/noise\n"              → 8 bytes total.
-///   6. Read:   remote responds with "/noise\n" (accepted) or "na\n" (not available).
-///      Both count as ok=true; the distinction is recorded in meta.
-///
-/// No new external dependencies — only tokio TCP I/O, which is already in scope.
+// multistream-select negotiation against a consensus node's libp2p port (usually 9000).
+//
+// We send "/multistream/1.0.0\n"; if the remote echoes it back, it is a live libp2p
+// node and the probe passes. Then we propose "/noise\n". The answer is either
+// "/noise\n" or "na\n", and either way the node is up. Which one it was goes in meta.
 use crate::model;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -19,12 +12,12 @@ pub struct LibP2pHandshakeProbe {
     pub port: u16,
 }
 
-// Multistream-select messages (varint-prefixed, length includes the trailing \n).
-const MS_HEADER: &[u8] = b"\x13/multistream/1.0.0\n"; // varint 19 + 19 bytes
-const MS_NOISE: &[u8] = b"\x07/noise\n"; // varint  7 +  7 bytes
+// Varint-prefixed, and the length counts the trailing \n.
+const MS_HEADER: &[u8] = b"\x13/multistream/1.0.0\n";
+const MS_NOISE: &[u8] = b"\x07/noise\n";
 
 async fn read_ms_line(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
-    // Read one-byte varint length prefix (all messages we care about are < 128 bytes).
+    // Every message we care about is under 128 bytes, so the varint is one byte.
     let len = stream.read_u8().await? as usize;
     if len == 0 {
         return Ok(vec![]);
@@ -47,13 +40,11 @@ impl super::ProbeFn for LibP2pHandshakeProbe {
                 .await
                 .map_err(|e| anyhow::anyhow!("tcp_connect: {e}"))?;
 
-            // Step 1: send our multistream header.
             stream
                 .write_all(MS_HEADER)
                 .await
                 .map_err(|e| anyhow::anyhow!("write_ms_header: {e}"))?;
 
-            // Step 2: read remote's multistream header.
             let remote_header = read_ms_line(&mut stream)
                 .await
                 .map_err(|e| anyhow::anyhow!("read_ms_header: {e}"))?;
@@ -71,13 +62,11 @@ impl super::ProbeFn for LibP2pHandshakeProbe {
                 }));
             }
 
-            // Step 3: propose /noise.
             stream
                 .write_all(MS_NOISE)
                 .await
                 .map_err(|e| anyhow::anyhow!("write_noise_proposal: {e}"))?;
 
-            // Step 4: read response.
             let noise_resp = read_ms_line(&mut stream).await.unwrap_or_default();
             let noise_accepted = noise_resp.windows(b"/noise".len()).any(|w| w == b"/noise");
 

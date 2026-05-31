@@ -24,7 +24,7 @@ impl super::ProbeFn for BeaconHttpsProbe {
             }
         };
 
-        // GET /eth/v1/node/version — lightweight, read-only, no auth on public nodes.
+        // Cheapest read-only call in the Beacon API, and public nodes don't gate it.
         let endpoint = format!("{}/eth/v1/node/version", self.url.trim_end_matches('/'));
         let resp = client.get(&endpoint).send().await;
 
@@ -45,12 +45,11 @@ impl super::ProbeFn for BeaconHttpsProbe {
                         Some("rate limited (HTTP 429)".to_string()),
                         "rate_limited",
                     ),
+                    // Beacon API success looks like {"data": {"version": "..."}}
                     200 => match parsed.as_ref().ok() {
-                        // Beacon API success: {"data": {"version": "..."}}
                         Some(v) if v.get("data").and_then(|d| d.get("version")).is_some() => {
                             (true, None, "ok")
                         }
-                        // 200 but unexpected body structure.
                         _ => (
                             false,
                             Some("unexpected response (no data.version field)".to_string()),

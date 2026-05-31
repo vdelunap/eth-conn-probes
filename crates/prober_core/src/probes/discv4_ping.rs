@@ -1,25 +1,19 @@
-/// DiscV4 ping probe for Ethereum execution-layer boot nodes.
-///
-/// The execution P2P discovery protocol (devp2p discv4) runs over UDP on port 30303.
-/// This is distinct from the discv5 protocol used by consensus nodes.
-///
-/// Packet format (from the devp2p spec):
-///   packet = hash(32) || signature(65) || packet-type(1) || RLP-data
-///   hash      = keccak256(signature || packet-type || RLP-data)
-///   signature = sign(keccak256(packet-type || RLP-data))   [65 bytes: 64 sig + 1 rec-id]
-///
-/// Ping RLP-data: [version=4, from=[ip,udp,tcp], to=[ip,udp,tcp], expiration]
-/// Pong RLP-data: [to, ping-hash, expiration]
-///
-/// Flow: send PING → expect PONG (packet-type 0x02 at offset 97).
-/// Some nodes do an "endpoint proof" (they send a PING back before PONGing us);
-/// this probe handles that by responding with a PONG before re-waiting.
+// devp2p discv4 ping over UDP:30303, the execution-layer discovery protocol
+// (consensus nodes speak discv5 instead).
+//
+// Packet layout per the devp2p spec:
+//   packet    = hash(32) || signature(65) || packet-type(1) || RLP-data
+//   hash      = keccak256(signature || packet-type || RLP-data)
+//   signature = sign(keccak256(packet-type || RLP-data))
+//
+// Send PING, expect PONG. Nodes that want an endpoint proof PING us first; we
+// answer with a PONG and keep waiting.
 use crate::{model, rlp};
 use sha3::{Digest, Keccak256};
 
 const PACKET_PING: u8 = 0x01;
 const PACKET_PONG: u8 = 0x02;
-/// Minimum packet length: 32 (hash) + 65 (sig) + 1 (type)
+/// hash(32) + signature(65) + type(1)
 const HDR_LEN: usize = 98;
 
 pub struct Discv4PingProbe {
@@ -32,10 +26,6 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     h.update(data);
     h.finalize().into()
 }
-
-// ---------------------------------------------------------------------------
-// Packet builders
-// ---------------------------------------------------------------------------
 
 fn sign_packet(key: &k256::ecdsa::SigningKey, pkt_type: u8, rlp_data: &[u8]) -> Vec<u8> {
     // signature = sign(keccak256(packet_type || rlp_data))
@@ -110,16 +100,12 @@ fn build_pong(
     sign_packet(key, PACKET_PONG, &rlp_data)
 }
 
-// ---------------------------------------------------------------------------
-// Probe implementation
-// ---------------------------------------------------------------------------
-
 #[async_trait::async_trait]
 impl super::ProbeFn for Discv4PingProbe {
     async fn run(&self, timeout_ms: u64) -> model::AttemptResult {
         let started = model::now_ms();
 
-        // The boot nodes are raw IPs, but lookup_host handles both IPs and hostnames.
+        // Boot nodes are configured as raw IPs, but lookup_host takes hostnames too.
         let addr_str = format!("{}:{}", self.host, self.port);
         let target_addr = match tokio::net::lookup_host(&addr_str).await {
             Ok(mut addrs) => match addrs.find(|a| a.is_ipv4()) {
@@ -171,7 +157,6 @@ impl super::ProbeFn for Discv4PingProbe {
             };
         }
 
-        // Receive loop: wait for PONG. If we receive a PING (endpoint proof), respond with PONG.
         let probe = async {
             let mut buf = vec![0u8; 1280];
             loop {
@@ -187,8 +172,7 @@ impl super::ProbeFn for Discv4PingProbe {
                 match buf[97] {
                     PACKET_PONG => return Ok::<(), anyhow::Error>(()),
                     PACKET_PING => {
-                        // Endpoint proof: remote wants us to prove our IP is real.
-                        // Respond with a PONG so they will PONG us back.
+                        // Endpoint proof: PONG them back and they'll PONG us.
                         let ping_hash = &buf[..32];
                         let expiration = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)

@@ -6,9 +6,7 @@ from typing import Any, Optional
 import asyncpg
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# Coercion helpers: clients are third-party binaries, so every field is suspect.
 
 def _to_uuid(value: Any) -> Optional[uuid.UUID]:
     if value is None:
@@ -46,14 +44,10 @@ def _str(v: Any) -> Optional[str]:
     return str(v) if v is not None else None
 
 
-# ---------------------------------------------------------------------------
-# Main insert
-# ---------------------------------------------------------------------------
-
 async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
-    """Persist a full report inside a single transaction.
+    """Persist a report and its probe results in one transaction.
 
-    Returns True when inserted, False when the run_id already existed.
+    False means the run_id was already there and nothing was written.
     """
     server   = body.get("_server") or {}
     geo      = server.get("geo") or {}
@@ -161,19 +155,15 @@ async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Map data query
-# ---------------------------------------------------------------------------
-
 async def fetch_geo_reports(
     pool: asyncpg.Pool,
     kinds: list[str] | None = None,
     limit: int = 2000,
 ) -> list[dict]:
-    """Return one row per report that has valid coordinates, last 12 months.
+    """One row per geolocated report from the last 12 months.
 
-    When kinds is provided, ok_count/fail_count are restricted to those probe
-    kinds and reports with zero matching probe_runs are excluded.
+    With `kinds`, the counts only cover those probe kinds and reports that match
+    none of them drop out entirely.
     """
     async with pool.acquire() as conn:
         if kinds:

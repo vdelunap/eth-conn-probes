@@ -24,21 +24,21 @@ uuid = { version = "1.20.0", features = ["v4"] }
 toml = "0.9.11"
 chrono = { version = "0.4", features = ["serde"] }
 
-# TLS handshake probe (always compiled — rustls is already a transitive dep via reqwest)
+# TLS handshake probe (always compiled; rustls is already a transitive dep via reqwest)
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio-rustls = "0.26"
 webpki-roots = "0.26"
 x509-parser = "0.16"
 
-# Optional — discv5 feature
+# Optional: discv5 feature
 discv5 = { version = "0.10.2", optional = true }
 
-# Optional — discv4 + rlpx features (shared secp256k1, keccak, rand)
+# Optional: discv4 + rlpx features (shared secp256k1, keccak, rand)
 k256 = { version = "0.13", features = ["ecdsa", "ecdh"], optional = true }
 sha3 = { version = "0.10", optional = true }
 rand = { version = "0.8", optional = true }
 
-# Optional — rlpx feature only (ECIES: AES-128-CTR + HMAC-SHA256)
+# Optional: rlpx feature only (ECIES: AES-128-CTR + HMAC-SHA256)
 aes    = { version = "0.8", optional = true }
 ctr    = { version = "0.9", optional = true }
 cipher = { version = "0.4", optional = true }

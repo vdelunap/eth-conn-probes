@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
     pub run_id: String,
-    /// ISO 8601 UTC timestamp of when the run started (e.g. "2026-04-02T14:30:00.123Z").
+    /// ISO 8601 UTC, start of the run.
     pub timestamp: String,
     pub started_at_ms: u128,
     pub finished_at_ms: u128,
@@ -16,7 +16,7 @@ pub struct Report {
 pub struct ClientInfo {
     pub os: String,
     pub arch: String,
-    /// Persistent random UUID generated on first launch and stored locally.
+    /// Random UUID, generated on first launch and kept on disk.
     pub client_id: String,
     pub app_channel: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,42 +52,27 @@ pub struct AttemptResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProbeKind {
-    // --- RPC provider availability ---
+    // RPC providers, port 443
     DnsResolve,
     TcpConnect,
-    /// TLS handshake only (no HTTP request). Sits between tcp_connect and https_json_rpc.
     TlsHandshake,
     HttpControl,
     HttpsJsonRpc,
-    /// eth_sendRawTransaction write test. Success = any JSON-RPC response (even an error).
     HttpsJsonRpcWrite,
     WssJsonRpc,
-    /// eth_subscribe newHeads subscription test. Success = subscription ID received.
     WssSubscribe,
 
-    // --- Ethereum execution layer P2P ---
-    /// TCP connect to an Ethereum execution boot node on port 30303 (RLPx/DiscV5 port).
+    // Execution layer P2P, port 30303
     P2pTcpConnect,
-    /// Compares the system resolver result against Cloudflare DoH (1.1.1.1).
     DnsCompare,
-    /// DiscV5 ping to an Ethereum execution boot node (ENR on port 30303).
     Discv5Ping,
-    /// DiscV4 ping to an Ethereum execution boot node (UDP on port 30303).
     Discv4Ping,
-    /// RLPx ECIES auth handshake to an execution boot node (TCP:30303).
-    /// Success = remote sends any data back, proving the RLPx layer is reachable.
     RlpxHandshake,
 
-    // --- Ethereum consensus layer (Beacon chain) ---
-    /// TCP connect to a consensus boot node on port 9000 (libp2p port).
-    /// Derived from discv5_consensus ENRs via ip4/tcp4 fields.
+    // Consensus layer (Beacon chain), port 9000
     BeaconTcpConnect,
-    /// DiscV5 ping to a consensus boot node (ENR, typically on port 9000).
     BeaconDiscv5Ping,
-    /// HTTP GET to a public beacon chain REST API endpoint (/eth/v1/node/version).
     BeaconHttps,
-    /// libp2p multistream-select negotiation to a consensus boot node (TCP:9000).
-    /// Success = remote acknowledges /multistream/1.0.0, confirming it is a live libp2p node.
     LibP2pHandshake,
 }
 

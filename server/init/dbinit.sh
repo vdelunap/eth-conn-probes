@@ -1,5 +1,5 @@
 #!/bin/bash
-# Database initialisation — runs once on first container start (empty volume).
+# Database initialisation. Runs once on first container start (empty volume).
 # Execution order matters: roles must exist before schema.sql references them in GRANT.
 set -e
 

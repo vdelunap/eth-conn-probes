@@ -42,20 +42,18 @@ async fn jsonrpc_works_with_mockito() {
     assert!(r.ok);
 }
 
-#[tokio::test]
-async fn model_kinds_are_stable() {
-    let kinds: Array<ProbeKind> = [
-        ProbeKind::DnsResolve,
-        ProbeKind::TcpConnect,
-        ProbeKind::HttpControl,
-        ProbeKind::HttpsJsonRpc,
-        ProbeKind::WssJsonRpc,
-        ProbeKind::Discv5Ping,
-    ]
-    .to_vec();
-    assert_eq!(kinds.len(), 6);
+#[test]
+fn probe_kinds_serialize_to_snake_case() {
+    let cases = [
+        (ProbeKind::DnsResolve, "dns_resolve"),
+        (ProbeKind::HttpsJsonRpcWrite, "https_json_rpc_write"),
+        (ProbeKind::P2pTcpConnect, "p2p_tcp_connect"),
+        (ProbeKind::LibP2pHandshake, "lib_p2p_handshake"),
+    ];
+    for (kind, expected) in cases {
+        assert_eq!(
+            serde_json::to_string(&kind).unwrap(),
+            format!("\"{expected}\"")
+        );
+    }
 }
-
-// Minimal TS-like alias for the test above while staying in Rust:
-// (kept intentionally tiny)
-type Array<T> = Vec<T>;

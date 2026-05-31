@@ -1,8 +1,6 @@
 use serde::Serialize;
 use tauri::Manager;
 
-// --- Response types ---
-
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SendOutcome {
@@ -16,8 +14,6 @@ pub struct RunResponse {
     pub report: prober_core::model::Report,
     pub send: SendOutcome,
 }
-
-// --- client_id persistence ---
 
 fn load_or_create_client_id(app: &tauri::AppHandle) -> String {
     let path = match app
@@ -42,8 +38,6 @@ fn load_or_create_client_id(app: &tauri::AppHandle) -> String {
     let _ = std::fs::write(&path, &id);
     id
 }
-
-// --- Commands ---
 
 #[tauri::command]
 pub async fn run_probes(
