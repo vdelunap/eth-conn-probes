@@ -20,6 +20,7 @@ pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
         arch: std::env::consts::ARCH.to_string(),
         client_id: cfg.client.client_id.clone(),
         app_channel: cfg.client.app_channel.clone(),
+        network_label: cfg.client.network_label.clone(),
     };
 
     let mut jobs = probes::build_jobs(&cfg).context("build_jobs")?;

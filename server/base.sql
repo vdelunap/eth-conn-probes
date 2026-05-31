@@ -54,6 +54,7 @@ CREATE TABLE ethconnprobes.reports (
 
     client_ip       TEXT,
     user_agent      TEXT,
+    network_label   TEXT,
 
     geo_country_iso         CHAR(2),
     geo_country_name        TEXT,

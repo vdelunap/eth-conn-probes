@@ -18,10 +18,9 @@ pub struct RunConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
-    pub location_label: String,
+    #[serde(alias = "location_label", default)]
+    pub network_label: Option<String>,
     pub app_channel: String,
-    /// Persistent device identifier. Generated once on first launch and stored locally.
-    /// Set by the Tauri app before calling run_plan(); left empty for CLI use.
     #[serde(default)]
     pub client_id: String,
 }
@@ -170,7 +169,7 @@ pub fn default_config() -> Config {
             parallelism: 20,
         },
         client: ClientConfig {
-            location_label: String::new(),
+            network_label: None,
             app_channel: "desktop".to_string(),
             client_id: String::new(),
         },
