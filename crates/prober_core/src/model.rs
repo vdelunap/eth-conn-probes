@@ -19,6 +19,8 @@ pub struct ClientInfo {
     /// Persistent random UUID generated on first launch and stored locally.
     pub client_id: String,
     pub app_channel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

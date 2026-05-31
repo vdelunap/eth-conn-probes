@@ -53,8 +53,7 @@ def _str(v: Any) -> Optional[str]:
 async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
     """Persist a full report inside a single transaction.
 
-    Returns True when inserted, False when the run_id already existed
-    (the app's retry logic may re-submit; that's handled gracefully).
+    Returns True when inserted, False when the run_id already existed.
     """
     server   = body.get("_server") or {}
     geo      = server.get("geo") or {}
@@ -65,14 +64,13 @@ async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
     async with pool.acquire() as conn:
         async with conn.transaction():
 
-            # -- reports -------------------------------------------------------
             report_id: Optional[int] = await conn.fetchval(
                 """
                 INSERT INTO reports (
                     run_id, client_ts, started_at_ms, finished_at_ms,
                     os, arch, client_id, app_channel,
                     cfg_attempts, cfg_min_successes, cfg_timeout_ms, cfg_parallelism,
-                    client_ip, user_agent,
+                    client_ip, user_agent, network_label,
                     geo_country_iso, geo_country_name, geo_region_name, geo_city_name,
                     geo_postal_code, geo_timezone,
                     geo_latitude, geo_longitude, geo_accuracy_radius_km,
@@ -81,11 +79,11 @@ async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
                     $1,  $2,  $3,  $4,
                     $5,  $6,  $7,  $8,
                     $9,  $10, $11, $12,
-                    $13, $14,
-                    $15, $16, $17, $18,
-                    $19, $20,
-                    $21, $22, $23,
-                    $24, $25
+                    $13, $14, $15,
+                    $16, $17, $18, $19,
+                    $20, $21,
+                    $22, $23, $24,
+                    $25, $26
                 )
                 ON CONFLICT (run_id) DO NOTHING
                 RETURNING id
@@ -104,6 +102,7 @@ async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
                 _int(run_cfg.get("parallelism")),
                 _str(server.get("client_ip")),
                 _str(server.get("user_agent")),
+                _str(client.get("network_label")),
                 _str(geo.get("country_iso")),
                 _str(geo.get("country_name")),
                 _str(geo.get("region_name")),
@@ -118,9 +117,8 @@ async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
             )
 
             if report_id is None:
-                return False  # duplicate run_id — nothing to do
+                return False
 
-            # -- probe_runs + probe_attempts ------------------------------------
             for probe_run in results:
                 summary = probe_run.get("summary") or {}
 
@@ -164,36 +162,68 @@ async def insert_report(body: dict, pool: asyncpg.Pool) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Map data query (for future MapLibre integration)
+# Map data query
 # ---------------------------------------------------------------------------
 
-async def fetch_geo_reports(pool: asyncpg.Pool, limit: int = 1000) -> list[dict]:
-    """Return recent reports with geo data, aggregated with probe ok/fail counts.
+async def fetch_geo_reports(
+    pool: asyncpg.Pool,
+    kinds: list[str] | None = None,
+    limit: int = 2000,
+) -> list[dict]:
+    """Return one row per report that has valid coordinates, last 12 months.
 
-    Intended for the /api/geo-reports endpoint consumed by MapLibre.
-    Only returns reports from the last 12 months that have valid coordinates.
+    When kinds is provided, ok_count/fail_count are restricted to those probe
+    kinds and reports with zero matching probe_runs are excluded.
     """
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT
-                r.geo_latitude       AS lat,
-                r.geo_longitude      AS lon,
-                r.geo_country_iso    AS country_iso,
-                r.geo_country_name   AS country_name,
-                r.geo_city_name      AS city_name,
-                r.received_at,
-                COUNT(pr.id) FILTER (WHERE pr.ok = TRUE)  AS ok_count,
-                COUNT(pr.id) FILTER (WHERE pr.ok = FALSE) AS fail_count
-            FROM reports r
-            LEFT JOIN probe_runs pr ON pr.report_id = r.id
-            WHERE r.geo_latitude  IS NOT NULL
-              AND r.geo_longitude IS NOT NULL
-              AND r.received_at  >= NOW() - INTERVAL '1 year'
-            GROUP BY r.id
-            ORDER BY r.received_at DESC
-            LIMIT $1
-            """,
-            limit,
-        )
+        if kinds:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    r.geo_latitude       AS lat,
+                    r.geo_longitude      AS lon,
+                    r.geo_country_iso    AS country_iso,
+                    r.geo_country_name   AS country_name,
+                    r.geo_city_name      AS city_name,
+                    r.network_label,
+                    r.received_at,
+                    COUNT(pr.id) FILTER (WHERE pr.ok = TRUE  AND pr.kind = ANY($2)) AS ok_count,
+                    COUNT(pr.id) FILTER (WHERE pr.ok = FALSE AND pr.kind = ANY($2)) AS fail_count
+                FROM reports r
+                LEFT JOIN probe_runs pr ON pr.report_id = r.id
+                WHERE r.geo_latitude  IS NOT NULL
+                  AND r.geo_longitude IS NOT NULL
+                  AND r.received_at  >= NOW() - INTERVAL '1 year'
+                GROUP BY r.id
+                HAVING COUNT(pr.id) FILTER (WHERE pr.kind = ANY($2)) > 0
+                ORDER BY r.received_at DESC
+                LIMIT $1
+                """,
+                limit,
+                kinds,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    r.geo_latitude       AS lat,
+                    r.geo_longitude      AS lon,
+                    r.geo_country_iso    AS country_iso,
+                    r.geo_country_name   AS country_name,
+                    r.geo_city_name      AS city_name,
+                    r.network_label,
+                    r.received_at,
+                    COUNT(pr.id) FILTER (WHERE pr.ok = TRUE)  AS ok_count,
+                    COUNT(pr.id) FILTER (WHERE pr.ok = FALSE) AS fail_count
+                FROM reports r
+                LEFT JOIN probe_runs pr ON pr.report_id = r.id
+                WHERE r.geo_latitude  IS NOT NULL
+                  AND r.geo_longitude IS NOT NULL
+                  AND r.received_at  >= NOW() - INTERVAL '1 year'
+                GROUP BY r.id
+                ORDER BY r.received_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
     return [dict(r) for r in rows]

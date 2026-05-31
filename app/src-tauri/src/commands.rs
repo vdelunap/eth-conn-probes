@@ -3,7 +3,6 @@ use tauri::Manager;
 
 // --- Response types ---
 
-/// Whether the report was sent, queued for later, or skipped by the user.
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SendOutcome {
@@ -20,12 +19,6 @@ pub struct RunResponse {
 
 // --- client_id persistence ---
 
-/// Returns the persistent client ID for this device.
-///
-/// On first call a random UUID is generated and written to
-/// `<AppData>/client_id.txt`. On subsequent calls the stored value is returned.
-/// This lets us correlate reports from the same device across runs without
-/// collecting any personally identifiable information.
 fn load_or_create_client_id(app: &tauri::AppHandle) -> String {
     let path = match app
         .path()
@@ -35,7 +28,6 @@ fn load_or_create_client_id(app: &tauri::AppHandle) -> String {
         Err(_) => return uuid::Uuid::new_v4().to_string(),
     };
 
-    // Try to read an existing ID from disk.
     if let Ok(id) = std::fs::read_to_string(&path) {
         let id = id.trim().to_string();
         if !id.is_empty() {
@@ -43,7 +35,6 @@ fn load_or_create_client_id(app: &tauri::AppHandle) -> String {
         }
     }
 
-    // First launch: generate, persist, and return a fresh ID.
     let id = uuid::Uuid::new_v4().to_string();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -54,24 +45,23 @@ fn load_or_create_client_id(app: &tauri::AppHandle) -> String {
 
 // --- Commands ---
 
-/// Runs all probes using the hardcoded default configuration.
-///
-/// `no_send` — if true, the report is kept local (user opted out).
 #[tauri::command]
-pub async fn run_probes(app: tauri::AppHandle, no_send: bool) -> Result<String, String> {
-    // Load the hardcoded default config and inject the persistent client ID.
+pub async fn run_probes(
+    app: tauri::AppHandle,
+    no_send: bool,
+    network_label: Option<String>,
+) -> Result<String, String> {
     let mut cfg = prober_core::config::default_config();
     cfg.client.client_id = load_or_create_client_id(&app);
+    cfg.client.network_label = network_label.filter(|s| !s.trim().is_empty());
     if no_send {
         cfg.reporting.enabled = false;
     }
 
-    // Run all probes concurrently.
     let report = prober_core::run_plan(cfg.clone())
         .await
         .map_err(|e| e.to_string())?;
 
-    // Try to send the report; if it fails, queue it locally for a later retry.
     let send = if cfg.reporting.enabled {
         match prober_core::reporting::send_report(
             &report,
@@ -100,11 +90,23 @@ pub async fn run_probes(app: tauri::AppHandle, no_send: bool) -> Result<String, 
     serde_json::to_string(&payload).map_err(|e| e.to_string())
 }
 
-/// Attempts to re-send all locally queued reports.
 #[tauri::command]
 pub async fn flush_queued_reports(app: tauri::AppHandle) -> Result<String, String> {
     let flushed = crate::queue::flush_queue(&app)
         .await
         .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "flushed": flushed }).to_string())
+}
+
+#[tauri::command]
+pub async fn get_geo_reports(kinds: Vec<String>) -> Result<String, String> {
+    let cfg = prober_core::config::default_config();
+    let data = prober_core::reporting::fetch_geo_reports(
+        &cfg.reporting.report_url,
+        &kinds,
+        cfg.reporting.timeout_ms,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    serde_json::to_string(&data).map_err(|e| e.to_string())
 }
