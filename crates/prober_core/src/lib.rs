@@ -7,9 +7,8 @@ pub mod reporting;
 pub mod rlp;
 
 pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
-    // When both ring and aws-lc-rs are compiled in (reqwest pulls aws-lc-rs),
-    // rustls::ClientConfig::builder() panics without an explicit default provider.
-    // install_default() is a no-op if already set, so it's safe to call on every run.
+    // rustls panics on builder() when both ring and aws-lc-rs are linked in.
+    // No-op if a provider was already installed.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let started_at_ms = model::now_ms();
@@ -25,8 +24,6 @@ pub async fn run_plan(cfg: config::Config) -> anyhow::Result<model::Report> {
 
     let mut jobs = probes::build_jobs(&cfg).context("build_jobs")?;
 
-    // Fetch live connected peers from Beacon API endpoints and add TCP + libp2p probes.
-    // Remove the next two lines (and beacon_peers module) to disable this feature.
     let live_peers = probes::beacon_peers::fetch_all(&cfg, cfg.run.timeout_ms).await;
     jobs.extend(probes::build_live_peer_jobs(live_peers));
 

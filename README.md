@@ -16,12 +16,12 @@ Each run executes all probe types in parallel and produces a structured JSON rep
 |---|---|
 | `dns_resolve` | System DNS resolves the provider hostname |
 | `tcp_connect` | TCP 3-way handshake to port 443 |
-| `tls_handshake` | TLS 1.3 handshake — extracts version, cipher suite, and certificate info |
+| `tls_handshake` | TLS handshake. Extracts version, cipher suite, and certificate info |
 | `https_json_rpc` | Full HTTPS + JSON-RPC `eth_chainId` (read path) |
-| `https_json_rpc_write` | `eth_sendRawTransaction` with dummy payload — detects write censorship (OFAC-style) |
+| `https_json_rpc_write` | `eth_sendRawTransaction` with dummy payload. Detects write censorship (OFAC-style) |
 | `wss_json_rpc` | WebSocket upgrade + JSON-RPC call over WSS |
-| `wss_subscribe` | `eth_subscribe newHeads` — confirms push subscriptions are available |
-| `dns_compare` | System resolver vs Cloudflare DoH (1.1.1.1) — detects DNS poisoning/blocking |
+| `wss_subscribe` | `eth_subscribe newHeads`. Confirms push subscriptions are available |
+| `http_control` | Reachability of the collector itself. Off by default, useful when debugging it |
 
 Each `[[probes.tcp]]` entry auto-generates `dns_resolve` + `tcp_connect` + `tls_handshake`.
 Each `[[probes.https_jsonrpc]]` entry auto-generates `https_json_rpc` + `https_json_rpc_write`.
@@ -34,27 +34,30 @@ Configured providers: `publicnode`, `cloudflare`, `llamarpc`, `drpc`, `flashbots
 | Probe | What it tests |
 |---|---|
 | `p2p_tcp_connect` | TCP connect to EF boot nodes on port 30303 (devp2p port) |
-| `discv4_ping` | Full devp2p DiscV4 UDP handshake — detects UDP-level blocking |
-| `rlpx_handshake` | RLPx ECIES auth handshake — detects DPI-based filtering of the RLPx transport |
+| `discv4_ping` | Full devp2p DiscV4 UDP handshake. Detects UDP-level blocking |
+| `rlpx_handshake` | RLPx ECIES auth handshake. Detects DPI-based filtering of the RLPx transport |
+| `dns_compare` | System resolver vs Cloudflare DoH (1.1.1.1). Detects DNS poisoning/blocking |
+| `discv5_ping` | DiscV5 ping to an execution boot node. Unused by default (they speak devp2p v4) |
 
 If port 443 works but 30303 fails → selective Ethereum P2P censorship.
 If TCP works but UDP fails → DiscV4 peer discovery is blocked.
-If TCP works but RLPx auth is rejected → Deep Packet Inspection filtering RLPx traffic.
+If TCP works but the RLPx auth packet times out → Deep Packet Inspection filtering RLPx traffic.
 
-Boot nodes: EF Asia-Pacific (`18.138.108.67`), EF US-East (`3.209.45.79`), EF Southeast Asia (`52.187.207.27`).
+Boot nodes (from go-ethereum `params/bootnodes.go`): `EF-ap-southeast` (`18.138.108.67`),
+`EF-us-east` (`3.209.45.79`), `EF-hetzner-hel` (`65.108.70.101`), `EF-hetzner-fsn` (`157.90.35.166`).
 
-### Consensus Layer / Beacon Chain (port 9000)
+### Consensus Layer / Beacon Chain (ports 9000 and 443)
 
 | Probe | What it tests |
 |---|---|
 | `beacon_discv5_ping` | DiscV5 ping to consensus boot nodes via ENR |
-| `beacon_tcp_connect` | TCP connect to port 9000 — derived from ENR `ip4`/`tcp4` fields |
-| `libp2p_handshake` | multistream-select `/noise` negotiation — confirms a live libp2p node |
+| `beacon_tcp_connect` | TCP connect to a live peer's libp2p port |
+| `lib_p2p_handshake` | multistream-select `/noise` negotiation. Confirms a live libp2p node |
 | `beacon_https` | HTTP GET `/eth/v1/node/version` to public Beacon REST APIs |
 
-`beacon_tcp_connect` and `libp2p_handshake` targets are derived automatically from the same ENR entries used for `beacon_discv5_ping` — the `ip4` and `tcp4` fields are decoded to get the host and port.
+`beacon_tcp_connect` and `lib_p2p_handshake` targets are **not** taken from the configured ENRs, because boot nodes are discovery-only and firewall inbound TCP:9000, so probing them would only ever measure that firewall. Instead, `beacon_peers::fetch_all` queries `/eth/v1/node/peers?state=connected` on each `beacon_https` endpoint at the start of every run and keeps the `direction: "outbound"` peers: the beacon node dialled those itself, which proves they have a routable address and an open listening port. Non-routable addresses (RFC-1918, CGNAT, loopback, ULA) are dropped and the remainder deduplicated by `(host, port)`.
 
-Consensus nodes: Teku (AWS Ohio, Sydney), Lighthouse (Sydney, London), Nimbus (Frankfurt).
+Consensus boot nodes: Teku (AWS Ohio, AWS Sydney), Nimbus (Frankfurt).
 Beacon REST APIs: `publicnode`, `chainsafe-lodestar`.
 
 ---
@@ -64,25 +67,32 @@ Beacon REST APIs: `publicnode`, `chainsafe-lodestar`.
 ```
 eth-conn-probes/
 ├── crates/
-│   ├── prober_core/        # Core library: probes, config, model, reporting
+│   ├── prober_core/          # Core library: probes, config, model, reporting
 │   │   └── src/
-│   │       ├── probes/     # One file per probe type
-│   │       ├── rlp.rs      # Shared minimal RLP encoder (no external deps)
-│   │       ├── config.rs   # TOML-deserialized config + hardcoded default
-│   │       ├── model.rs    # Report / ProbeRun / AttemptResult types
-│   │       └── reporting.rs# HTTP POST to the collector server
-│   └── prober_cli/         # CLI binary (eth-prober)
+│   │       ├── probes/       # One file per probe type
+│   │       │   └── beacon_peers.rs  # Live peer discovery via Beacon REST API
+│   │       ├── rlp.rs        # Minimal RLP encoder (no external deps)
+│   │       ├── config.rs     # TOML config + hardcoded default
+│   │       ├── model.rs      # Report / ProbeRun / AttemptResult types
+│   │       └── reporting.rs  # POST /report + GET /api/geo-reports
+│   └── prober_cli/           # CLI binary (eth-prober)
 ├── app/
-│   └── src-tauri/          # Tauri desktop app
+│   ├── src/                  # React frontend
+│   │   ├── App.jsx           # Probes tab: results tables per section
+│   │   ├── MapView.jsx       # Map tab: MapLibre + OpenFreeMap tiles
+│   │   └── lib/              # Tauri invoke wrappers, shared types
+│   └── src-tauri/            # Tauri shell
 │       └── src/
-│           ├── commands.rs # Tauri commands: run_probes, flush_queued_reports
-│           └── queue.rs    # Offline report queue (JSONL)
+│           ├── commands.rs   # run_probes, flush_queued_reports, get_geo_reports
+│           └── queue.rs      # Offline report queue (JSONL)
+├── server/                   # FastAPI collector
+│   ├── app/                  # main.py, storage.py, db.py, geoip.py
+│   ├── base.sql              # Schema (ethconnprobes)
+│   └── docker-compose.yml    # Postgres 16 + collector
 ├── docs/
-│   └── DESIGN.md           # Technical design document (TFM format)
-├── server/
-│   └── docker-compose.yml  # Postgres + eth-prober-server collector
+│   └── DESIGN.md             # Technical design document
 └── config/
-    └── default.toml        # Default CLI configuration
+    └── default.toml          # Default CLI configuration
 ```
 
 The workspace has three Cargo members: `prober_core`, `prober_cli`, and `app/src-tauri`.
@@ -91,8 +101,11 @@ The workspace has three Cargo members: `prober_core`, `prober_cli`, and `app/src
 
 `run_plan(cfg) -> Report` is the single entry point. It:
 1. Calls `build_jobs(&cfg)` to create a list of `ProbeJob` instances from the config.
-2. Runs all jobs concurrently through `run_jobs()` with a tokio semaphore limiting parallelism.
-3. Each job runs `attempts` times; results are summarized into min/avg/max RTT and an `ok` bool.
+2. Fetches live beacon peers and appends their TCP + libp2p jobs via `build_live_peer_jobs()`.
+3. Runs all jobs concurrently through `run_jobs()` with a tokio semaphore limiting parallelism.
+4. Each job runs `attempts` times; results are summarized into min/avg/max RTT and an `ok` bool.
+
+A job that panics is reported as a failed `ProbeRun` with `category: "internal"` rather than being dropped.
 
 Optional Cargo features:
 
@@ -107,9 +120,9 @@ The `discv4` probe implements the full devp2p handshake from scratch: RLP encodi
 
 The `rlpx` probe implements the EIP-8 auth packet: ECIES encryption (ephemeral ECDH + SHA-256 KDF + AES-128-CTR + HMAC-SHA256) using the remote's public key embedded in the enode:// URL.
 
-The `discv5` feature also enables automatic derivation of `beacon_tcp_connect` and `libp2p_handshake` probes by decoding the `ip4`/`tcp4` fields from consensus ENRs.
+The `discv5` feature gates the `beacon_discv5_ping` and `discv5_ping` probes only. `beacon_tcp_connect` and `lib_p2p_handshake` are always compiled; their targets come from the Beacon REST API at runtime, not from ENRs.
 
-TLS, write-censorship, and WebSocket subscription probes are compiled unconditionally (no feature flag needed) because their dependencies — `rustls`, `reqwest`, and `tokio-tungstenite` — are already transitive dependencies of the base build.
+TLS, write-censorship, and WebSocket subscription probes are compiled unconditionally (no feature flag needed) because their dependencies (`rustls`, `reqwest`, and `tokio-tungstenite`) are already transitive dependencies of the base build.
 
 ### prober_cli
 
@@ -123,23 +136,31 @@ eth-prober print-default-config
 
 ### Tauri App
 
-Uses the hardcoded `default_config()` from `prober_core`. Exposes two commands to the frontend:
+Uses the hardcoded `default_config()` from `prober_core`; it does not read `config/default.toml`. Two tabs: **Probes**, which runs a scan and shows one table per section, and **Map**, which plots every reported location on MapLibre with a filter by probe kind.
 
-- `run_probes(no_send: bool)` — runs all probes; if the server POST fails, the report is appended to `queued_reports.jsonl` in AppData for a later retry.
-- `flush_queued_reports()` — drains the offline queue.
+Three commands are exposed to the frontend:
+
+- `run_probes(no_send: bool, network_label: Option<String>)`: runs all probes; if the server POST fails, the report is appended to `queued_reports.jsonl` in AppData for a later retry.
+- `flush_queued_reports()`: drains the offline queue. Currently counts and clears entries without re-sending them; see the TODO in `queue.rs`.
+- `get_geo_reports(kinds: Vec<String>)`: proxies `GET /api/geo-reports` for the map.
+
+`network_label` is an optional self-reported tag (home, university, café, VPN…) that gives the collected data some context beyond the IP-derived location.
 
 A persistent `client_id` UUID is generated on first launch and stored in AppData, allowing the server to correlate reports from the same device without collecting PII.
 
 ### Server
 
-Docker Compose stack: Postgres 16 + Rust HTTP server.
+Docker Compose stack: Postgres 16 + a FastAPI collector (`server/app`, run under uvicorn).
 
 ```
-POST /report    # Receives JSON reports from CLI and app clients
-GET  /ping      # Health check → "ok"
+POST /report            # Receives JSON reports from CLI and app clients (10/min per IP)
+GET  /api/geo-reports   # GeoJSON FeatureCollection for the map (30/min per IP)
+GET  /ping              # Health check → "ok"
 ```
 
-The DB is internal-only (no exposed port). GeoIP lookup is mounted at `/geoip` for server-side location enrichment.
+`/report` rejects bodies over 512 KB, reports with more than 500 probe results, and anything without a valid UUID `run_id`; duplicate `run_id`s are ignored via `ON CONFLICT DO NOTHING`. Reports are stored across three tables (`reports`, `probe_runs`, `probe_attempts`) in the `ethconnprobes` schema; see `server/base.sql`.
+
+GeoIP enrichment happens server-side from GeoLite2 mmdb files mounted read-only at `/geoip`; if they are absent, reports are stored without location and simply won't appear on the map.
 
 ---
 
@@ -155,7 +176,8 @@ The DB is internal-only (no exposed port). GeoIP lookup is mounted at `/geoip` f
     "os": "linux",
     "arch": "x86_64",
     "client_id": "uuid-v4",
-    "app_channel": "cli"
+    "app_channel": "cli",
+    "network_label": "home"
   },
   "run": { "attempts": 3, "min_successes": 1, "timeout_ms": 5000, "parallelism": 16 },
   "results": [
@@ -185,9 +207,9 @@ timeout_ms    = 5000
 parallelism   = 16     # Max concurrent probes
 
 [client]
-location_label = ""    # Informational; server derives location from IP
-app_channel    = "cli"
-client_id      = ""    # Set by Tauri app; leave empty for CLI
+network_label = ""     # Self-reported context (home, university, vpn…); optional
+app_channel   = "cli"
+client_id     = ""     # Set by the Tauri app; leave empty for CLI
 
 [reporting]
 enabled    = true
@@ -232,14 +254,16 @@ enode = "enode://22a8232c...@3.209.45.79:30303"
 name = "publicnode"
 host = "ethereum-rpc.publicnode.com"
 
-[[probes.discv5_consensus]] # DiscV5 ping + beacon_tcp_connect + libp2p_handshake (feature: discv5)
+[[probes.discv5_consensus]] # DiscV5 ping only (feature: discv5)
 name = "teku-aws-ohio"
 enr  = "enr:-Iu4Q..."
 
-[[probes.beacon_https]]   # GET /eth/v1/node/version
+[[probes.beacon_https]]   # GET /eth/v1/node/version, and the source of live peers
 name = "publicnode"
 url  = "https://ethereum-beacon-api.publicnode.com"
 ```
+
+`location_label` is accepted as an alias for `network_label` so older config files keep working.
 
 ---
 
@@ -272,28 +296,44 @@ npm run tauri dev
 
 ### Server
 
+The stack reads its credentials from Docker secrets, so they have to exist before the
+first `up`:
+
 ```bash
 cd server
-POSTGRES_PASSWORD=secret docker compose up -d
+mkdir -p secrets/postgres geoip
+echo 'a-strong-password'          > secrets/postgres/pgfile   # POSTGRES_PASSWORD_FILE
+printf '[main]\nhost=postgres\nport=5432\ndbname=dbalfa\nuser=ethprobes\npassword=…\n' \
+                                  > secrets/postgres/pgs      # PGSERVICEFILE for the API
+# base.sql creates the ethprobes/dbuser roles without passwords; put the matching
+# ALTER USER … PASSWORD statements in secrets/postgres/auth.sql
+
+# Optional: drop GeoLite2-City.mmdb and GeoLite2-ASN.mmdb into ./geoip for
+# server-side location enrichment. Without them reports are stored unlocated.
+
+docker compose up -d
 ```
+
+The collector listens on host port `8000` and Postgres is published on `15432` for
+inspection, so firewall it or drop the `ports` block if you don't need it.
 
 ---
 
-## DNS Compare — censorship detection
+## DNS Compare: censorship detection
 
 The `dns_compare` probe resolves each hostname twice:
-1. **System resolver** — whatever DNS the OS uses (may be poisoned by ISP).
-2. **Cloudflare DoH** — encrypted DNS-over-HTTPS to `1.1.1.1`, bypasses the local resolver entirely.
+1. **System resolver**: whatever DNS the OS uses (may be poisoned by ISP).
+2. **Cloudflare DoH**: encrypted DNS-over-HTTPS to `1.1.1.1`, bypasses the local resolver entirely.
 
 | Result | Interpretation |
 |---|---|
 | System returns IPs | OK (DoH IPs also stored for server analysis) |
 | System empty, DoH has IPs | DNS block suspected |
 | Both empty | General DNS failure |
-| IPs differ between resolvers | Flagged as `ip_mismatch` — may be CDN routing (normal) or DNS poisoning (suspicious), requires server-side analysis |
+| IPs differ between resolvers | Flagged as `ip_mismatch`. May be CDN routing (normal) or DNS poisoning (suspicious), requires server-side analysis |
 
 ## Write Censorship Detection
 
-The `https_json_rpc_write` probe sends `eth_sendRawTransaction` with the payload `"0x"` (an invalid transaction). A functioning provider returns a JSON-RPC error (e.g., `-32000 "invalid transaction"`). Both a `result` and an `error` field in the response count as `ok=true` — what matters is that the write endpoint processed the request.
+The `https_json_rpc_write` probe sends `eth_sendRawTransaction` with the payload `"0x"` (an invalid transaction). A functioning provider returns a JSON-RPC error (e.g., `-32000 "invalid transaction"`). Both a `result` and an `error` field in the response count as `ok=true`; what matters is that the write endpoint processed the request.
 
 A provider that returns HTTP 403, times out, or returns no response is flagged as `ok=false` with `category=auth_required` or `category=network`, signalling potential OFAC-compliance filtering of the write path while the read path still works.

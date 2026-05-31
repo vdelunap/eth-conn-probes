@@ -1,5 +1,7 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, lazy, Suspense } from 'react'
 import { runProbes } from './lib/api.js'
+
+const MapView = lazy(() => import('./MapView.jsx'))
 
 // --- Styles ---
 
@@ -163,16 +165,18 @@ const S = {
     color: '#94a3b8',
     fontFamily: 'ui-monospace, monospace',
   },
+  // Amber and purple mean "the provider answered, just not with what we wanted";
+  // red means we never got through.
   reasonText: (category) => {
     const colors = {
-      rate_limited:  '#f59e0b',  // amber  — free-tier throttle, not a real block
-      auth_required: '#a78bfa',  // purple — provider requires an API key
-      rpc_error:     '#f97316',  // orange — provider replied but with an error
-      api_error:     '#f97316',  // orange — unexpected response structure
-      http_error:    '#ef4444',  // red    — bad HTTP status
-      network:       '#ef4444',  // red    — TCP/connection failure
-      dns_error:     '#ef4444',  // red    — name not resolved
-      timeout:       '#ef4444',  // red    — no response in time
+      rate_limited:  '#f59e0b',
+      auth_required: '#a78bfa',
+      rpc_error:     '#f97316',
+      api_error:     '#f97316',
+      http_error:    '#ef4444',
+      network:       '#ef4444',
+      dns_error:     '#ef4444',
+      timeout:       '#ef4444',
     }
     return {
       fontSize: 11,
@@ -210,6 +214,49 @@ const S = {
   thSortableActive: {
     color: '#a5b4fc',
   },
+  tabs: {
+    display: 'flex',
+    gap: 4,
+    marginBottom: 24,
+    borderBottom: '1px solid #1e293b',
+  },
+  tab: (active) => ({
+    padding: '7px 16px',
+    fontSize: 13,
+    fontWeight: 600,
+    color: active ? '#a5b4fc' : '#64748b',
+    background: 'none',
+    border: 'none',
+    borderBottom: `2px solid ${active ? '#6366f1' : 'transparent'}`,
+    cursor: 'pointer',
+    marginBottom: -1,
+  }),
+  networkRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 13,
+    color: '#94a3b8',
+  },
+  networkSelect: {
+    padding: '5px 8px',
+    fontSize: 12,
+    background: '#1e293b',
+    color: '#e2e8f0',
+    border: '1px solid #334155',
+    borderRadius: 5,
+    cursor: 'pointer',
+  },
+  networkInput: {
+    padding: '5px 8px',
+    fontSize: 12,
+    background: '#1e293b',
+    color: '#e2e8f0',
+    border: '1px solid #334155',
+    borderRadius: 5,
+    width: 140,
+    outline: 'none',
+  },
 }
 
 // --- Helpers ---
@@ -237,21 +284,16 @@ const KIND_LABELS = {
   beacon_https:         'Beacon API',
 }
 
-// Probe kinds that belong to the execution P2P section.
 const EXEC_P2P_KINDS = new Set([
   'p2p_tcp_connect', 'discv4_ping', 'dns_compare', 'discv5_ping', 'rlpx_handshake',
 ])
-// Probe kinds that belong to the consensus / beacon section.
 const BEACON_KINDS = new Set([
   'beacon_discv5_ping', 'beacon_tcp_connect', 'lib_p2p_handshake', 'beacon_https',
 ])
-// Combined for any P2P section (used to exclude from RPC section).
+// Anything not in here belongs to the RPC section.
 const P2P_KINDS = new Set([...EXEC_P2P_KINDS, ...BEACON_KINDS])
 
-/**
- * Returns { error, category } for a failed probe by inspecting its attempts.
- * Uses the last attempt that has an error (most recent retry).
- */
+// Error and category of the most recent failed attempt.
 function getFailureInfo(r) {
   if (r.summary.ok) return { error: null, category: null }
   for (let i = r.attempts.length - 1; i >= 0; i--) {
@@ -264,10 +306,8 @@ function getFailureInfo(r) {
   return { error: 'unknown failure', category: null }
 }
 
-/**
- * For dns_compare probes, returns a human-readable summary of the IP comparison
- * from the last attempt's meta, to show in the Reason column.
- */
+// dns_compare passes even when the two resolvers disagree, so the Reason column
+// has to dig the comparison out of meta itself.
 function getDnsCompareReason(r) {
   const last = r.attempts[r.attempts.length - 1]
   if (!last) return null
@@ -275,14 +315,14 @@ function getDnsCompareReason(r) {
   if (last.error) return { text: last.error, category: last.meta?.category ?? null }
   if (ip_mismatch) {
     return {
-      text: `IP mismatch — system: ${system_ips.join(', ')} | DoH: ${doh_ips.join(', ')}`,
+      text: `IP mismatch, system: ${system_ips.join(', ')} | DoH: ${doh_ips.join(', ')}`,
       category: 'rpc_error',
     }
   }
   return null
 }
 
-/** Extracts the short provider name from a target string like "host (name)". */
+// Targets are formatted as "host (name)".
 function parseTarget(target) {
   const match = target.match(/\(([^)]+)\)$/)
   if (match) {
@@ -292,7 +332,7 @@ function parseTarget(target) {
 }
 
 function fmt(ms) {
-  if (ms == null) return '—'
+  if (ms == null) return '-'
   return ms + ' ms'
 }
 
@@ -301,10 +341,7 @@ function duration(report) {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
 }
 
-/**
- * Detects the pattern: P2P TCP OK + DiscV4 UDP FAIL for the same node name.
- * Returns the list of node names where this pattern is present.
- */
+// Nodes we can reach over TCP but not over DiscV4 UDP.
 function detectUdpTcpMismatch(execResults) {
   const tcpOk  = new Set(
     execResults
@@ -334,18 +371,15 @@ function UdpTcpMismatchNote({ nodes }) {
       lineHeight: 1.6,
     }}>
       <span style={{ color: '#fbbf24', fontWeight: 600 }}>UDP/TCP mismatch</span>
-      {' '}— TCP:30303 reaches {nodes.join(', ')} but DiscV4 UDP times out.
-      {' '}This is ambiguous: it may mean (1) <strong style={{ color: '#cbd5e1' }}>your local firewall
-      (Windows Defender) is blocking incoming UDP responses</strong> on the ephemeral port used by
-      the probe, or (2) <strong style={{ color: '#cbd5e1' }}>your router or ISP is filtering
-      UDP on port 30303</strong>. In either case, an Ethereum execution node on this network
-      could connect to already-known peers via TCP but would fail at discovering new ones
-      through the discv4 protocol.
+      {'. '}TCP:30303 reaches {nodes.join(', ')} but DiscV4 UDP times out. Either your
+      {' '}<strong style={{ color: '#cbd5e1' }}>local firewall is dropping the UDP replies</strong>
+      {' '}on the probe's ephemeral port, or your{' '}
+      <strong style={{ color: '#cbd5e1' }}>router or ISP filters UDP on 30303</strong>.
+      {' '}Either way, an execution node here could talk to peers it already knows but
+      {' '}could not discover new ones.
     </div>
   )
 }
-
-// --- Sub-components ---
 
 function SendStatus({ send }) {
   const label = send.kind === 'sent'
@@ -362,11 +396,10 @@ function SendStatus({ send }) {
   )
 }
 
-// Sort direction cycles: null → 'asc' → 'desc' → null
+// Each header cycles null → asc → desc → null.
 const SORT_ICONS = { null: ' ↕', asc: ' ↑', desc: ' ↓' }
 
-// Fixed sort priority: protocol > provider > status.
-// Each column can be toggled independently (null/asc/desc).
+// Columns sort independently but always in the order protocol > provider > status.
 function ResultsTable({ results }) {
   const [sort, setSort] = useState({ protocol: null, provider: null, status: null })
 
@@ -380,7 +413,6 @@ function ResultsTable({ results }) {
 
   const sorted = useMemo(() => {
     const items = [...results]
-    // Apply sorts in fixed priority order: protocol, then provider, then status.
     items.sort((a, b) => {
       const checks = [
         [sort.protocol, KIND_LABELS[a.kind] ?? a.kind,          KIND_LABELS[b.kind] ?? b.kind],
@@ -472,20 +504,36 @@ function Summary({ results, durationStr }) {
   )
 }
 
-// --- Main app ---
+const NETWORK_PRESETS = [
+  { value: '',           label: 'Not specified' },
+  { value: 'home',       label: 'Home' },
+  { value: 'university', label: 'University' },
+  { value: 'office',     label: 'Office' },
+  { value: 'cafe',       label: 'Café / Restaurant' },
+  { value: 'mobile',     label: 'Mobile (4G/5G)' },
+  { value: 'vpn',        label: 'VPN' },
+  { value: '__other__',  label: 'Other…' },
+]
 
 export default function App() {
+  const [tab, setTab] = useState('probes')
   const [sendReport, setSendReport] = useState(true)
+  const [networkPreset, setNetworkPreset] = useState('')
+  const [networkCustom, setNetworkCustom] = useState('')
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+
+  const networkLabel = networkPreset === '__other__'
+    ? networkCustom.trim() || null
+    : networkPreset || null
 
   async function handleRun() {
     setRunning(true)
     setError(null)
     setResult(null)
     try {
-      const res = await runProbes(!sendReport)
+      const res = await runProbes(!sendReport, networkLabel)
       setResult(res)
     } catch (e) {
       setError(String(e))
@@ -496,13 +544,11 @@ export default function App() {
 
   return (
     <>
-      {/* Keyframe for spinner — injected once via a style tag */}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
       <div style={S.page}>
         <div style={S.inner}>
 
-          {/* Header */}
           <h1 style={S.title}>Ethereum Connectivity Prober</h1>
           <p style={S.subtitle}>
             Tests RPC provider availability and Ethereum P2P network reachability from your
@@ -510,7 +556,12 @@ export default function App() {
             network access across regions.
           </p>
 
-          {/* Controls */}
+          <div style={S.tabs}>
+            <button style={S.tab(tab === 'probes')} onClick={() => setTab('probes')}>Probes</button>
+            <button style={S.tab(tab === 'map')} onClick={() => setTab('map')}>Map</button>
+          </div>
+
+          {tab === 'probes' ? (<div>
           <div style={S.controls}>
             <label style={S.toggle}>
               <input
@@ -532,14 +583,35 @@ export default function App() {
             </button>
           </div>
 
-          {/* Error */}
+          <div style={{ ...S.networkRow, marginBottom: 20 }}>
+            <span>Network:</span>
+            <select
+              style={S.networkSelect}
+              value={networkPreset}
+              onChange={e => setNetworkPreset(e.target.value)}
+            >
+              {NETWORK_PRESETS.map(p => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+            </select>
+            {networkPreset === '__other__' && (
+              <input
+                style={S.networkInput}
+                type="text"
+                placeholder="Describe your network…"
+                maxLength={64}
+                value={networkCustom}
+                onChange={e => setNetworkCustom(e.target.value)}
+              />
+            )}
+          </div>
+
           {error !== null && (
             <div style={S.errorBox}>
               <strong>Error:</strong> {error}
             </div>
           )}
 
-          {/* Results */}
           {result !== null && (() => {
             const rpcResults    = result.report.results.filter(r => !P2P_KINDS.has(r.kind))
             const execP2pResults = result.report.results.filter(r => EXEC_P2P_KINDS.has(r.kind))
@@ -549,27 +621,24 @@ export default function App() {
                 <SendStatus send={result.send} />
 
                 <div style={S.section}>
-                  <div style={S.sectionTitle}>Section 1 — RPC provider availability</div>
+                  <div style={S.sectionTitle}>Section 1: RPC provider availability</div>
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
-                    Tests whether public Ethereum RPC endpoints are reachable from your location.
-                    This covers the access layer used by wallets (MetaMask, etc.) and dapps.
-                    Includes TLS handshake inspection, write-path censorship detection
-                    (HTTPS Write sends <code>eth_sendRawTransaction</code>), and WebSocket
-                    subscription availability.
+                    Whether public RPC endpoints answer from here, the layer wallets and
+                    dapps depend on. HTTPS Write sends an <code>eth_sendRawTransaction</code>
+                    {' '}to check the write path separately from the read path.
                   </p>
                   <Summary results={rpcResults} durationStr={duration(result.report)} />
                   <ResultsTable results={rpcResults} />
                 </div>
 
                 <div style={S.section}>
-                  <div style={S.sectionTitle}>Section 2 — Execution layer P2P</div>
+                  <div style={S.sectionTitle}>Section 2: Execution layer P2P</div>
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
-                    Tests the Ethereum execution layer P2P network. Port 30303 is used by
-                    execution nodes (RLPx + DiscV4). If TCP:30303 fails while TCP:443 works, it
-                    indicates selective port blocking. RLPx Auth sends an EIP-8 ECIES auth packet
-                    — a connection reset (RST) means the port is open but the node rejected our
-                    identity; a timeout means the port is blocked. DNS Compare checks whether your
-                    local resolver returns the same addresses as Cloudflare DoH (1.1.1.1).
+                    Execution nodes talk RLPx and DiscV4 on port 30303. If 443 works and 30303
+                    doesn't, something is blocking that port specifically. RLPx Auth sends an
+                    EIP-8 auth packet: a reset means the node just rejected our identity, a
+                    timeout means the packet never arrived. DNS Compare puts your resolver
+                    side by side with Cloudflare DoH.
                   </p>
                   <Summary results={execP2pResults} />
                   <ResultsTable results={execP2pResults} />
@@ -577,15 +646,12 @@ export default function App() {
                 </div>
 
                 <div style={S.section}>
-                  <div style={S.sectionTitle}>Section 3 — Consensus layer P2P (Beacon chain)</div>
+                  <div style={S.sectionTitle}>Section 3: Consensus layer P2P (Beacon chain)</div>
                   <p style={{ margin: '0 0 10px', fontSize: 12, color: '#64748b' }}>
-                    Tests the Ethereum consensus (Beacon chain) layer. DiscV5 (beacon) pings
-                    consensus boot nodes via UDP:9000. Beacon TCP and libp2p probes target live
-                    peer nodes fetched dynamically from the Beacon REST API
-                    (<code>/eth/v1/node/peers</code>, outbound connections only) — these are real
-                    full peer nodes that have already accepted a connection from a beacon
-                    infrastructure node, so they have publicly routable addresses. Beacon API
-                    checks public REST endpoints (<code>/eth/v1/node/version</code>).
+                    DiscV5 pings consensus boot nodes on UDP:9000. The Beacon TCP and libp2p
+                    targets are live peers pulled from <code>/eth/v1/node/peers</code> at run
+                    time, outbound ones only, so we know a beacon node already dialled them
+                    successfully and their addresses are publicly routable.
                   </p>
                   <Summary results={beaconResults} />
                   <ResultsTable results={beaconResults} />
@@ -593,6 +659,11 @@ export default function App() {
               </div>
             )
           })()}
+          </div>) : (
+            <Suspense fallback={<div style={{ color: '#64748b', fontSize: 13 }}>Loading map…</div>}>
+              <MapView />
+            </Suspense>
+          )}
 
         </div>
       </div>

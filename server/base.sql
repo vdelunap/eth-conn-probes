@@ -1,15 +1,15 @@
--- eth-conn-probes — PostgreSQL base schema
+-- eth-conn-probes: PostgreSQL base schema
 -- Executed by init/dbinit.sh on first container start.
--- Passwords are NOT set here — they are altered in secrets/postgres/auth.sql.
+-- Passwords are NOT set here; they are altered in secrets/postgres/auth.sql.
 
 -- ---------------------------------------------------------------------------
--- Users (no passwords — set via auth.sql)
+-- Users (no passwords; set via auth.sql)
 -- ---------------------------------------------------------------------------
 CREATE USER ethprobes;
 CREATE USER dbuser;
 
 -- ---------------------------------------------------------------------------
--- Schema — created as admin (POSTGRES_USER / superuser)
+-- Schema, created as admin (POSTGRES_USER / superuser)
 -- ---------------------------------------------------------------------------
 SET SESSION AUTHORIZATION admin;
 CREATE SCHEMA IF NOT EXISTS ethconnprobes;

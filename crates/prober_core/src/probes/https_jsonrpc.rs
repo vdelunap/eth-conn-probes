@@ -40,40 +40,31 @@ impl super::ProbeFn for HttpsJsonRpcProbe {
                 let text = r.text().await.unwrap_or_default();
                 let parsed: Result<serde_json::Value, _> = serde_json::from_str(&text);
 
-                // Determine outcome based on HTTP status and JSON-RPC response body.
                 let (ok, error, category) = match status {
-                    // Authentication/authorization failure.
                     401 | 403 => (
                         false,
                         Some(format!("auth required (HTTP {status})")),
                         "auth_required",
                     ),
-                    // Rate limiting — free-tier providers (Ankr, LlamaRPC) sometimes do this.
                     429 => (
                         false,
                         Some("rate limited (HTTP 429)".to_string()),
                         "rate_limited",
                     ),
-                    // 200 OK — check the JSON-RPC response body.
                     200 => match parsed.as_ref().ok() {
-                        // Valid JSON-RPC success response.
                         Some(v) if v.get("result").is_some() => (true, None, "ok"),
-                        // Valid JSON-RPC error response (provider accepted the request but
-                        // returned an application-level error, e.g. method not allowed).
                         Some(v) if v.get("error").is_some() => {
                             let err_obj = &v["error"];
                             let msg = err_obj["message"].as_str().unwrap_or("unknown error");
                             let code = err_obj["code"].as_i64().unwrap_or(0);
                             (false, Some(format!("RPC error {code}: {msg}")), "rpc_error")
                         }
-                        // Response is 200 but the body is not valid JSON or missing fields.
                         _ => (
                             false,
                             Some("unexpected response (no result or error field)".to_string()),
                             "api_error",
                         ),
                     },
-                    // Any other HTTP error (5xx server errors, etc.).
                     _ => (false, Some(format!("HTTP {status}")), "http_error"),
                 };
 
@@ -88,10 +79,9 @@ impl super::ProbeFn for HttpsJsonRpcProbe {
                     }),
                 }
             }
-            // Network-level failure: the request never reached the server.
+            // The request never reached the server.
             Err(e) => {
                 let msg = e.to_string();
-                // Classify common connection errors for better reporting.
                 let (category, error) = if msg.contains("timed out") || msg.contains("timeout") {
                     ("timeout", "connection timed out".to_string())
                 } else if msg.contains("refused") {

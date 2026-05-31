@@ -38,17 +38,12 @@ pub async fn flush_queue(app: &tauri::AppHandle) -> anyhow::Result<u64> {
         if line.trim().is_empty() {
             continue;
         }
-        let report: prober_core::model::Report = serde_json::from_str(line)?;
-        // Try sending using the report's embedded reporting info is not available,
-        // so this only makes sense if you keep report_url stable.
-        // If you want robust flushing, store (report + url) in queue entries.
-        //
-        // Here we just count entries; real implementation should re-send.
-        let _ = report;
+        // TODO: actually re-POST these. Queue entries would need to carry the
+        // report_url they were meant for, since a Report doesn't embed it.
+        let _report: prober_core::model::Report = serde_json::from_str(line)?;
         flushed += 1;
     }
 
-    // For now: clear queue (you can upgrade this to resend + keep failures)
     std::fs::write(&path, "")?;
     Ok(flushed)
 }

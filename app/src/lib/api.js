@@ -1,12 +1,14 @@
 import { invoke } from '@tauri-apps/api/core'
 
-/**
- * Runs all probes and optionally sends the report to the server.
- *
- * @param {boolean} noSend - if true, the report is kept local and not sent.
- * @returns {Promise<{ report: Report, send: { kind: string, reason?: string } }>}
- */
-export async function runProbes(noSend) {
-  const json = await invoke('run_probes', { noSend })
+export async function runProbes(noSend, networkLabel) {
+  const json = await invoke('run_probes', {
+    noSend,
+    networkLabel: networkLabel || null,
+  })
+  return JSON.parse(json)
+}
+
+export async function getGeoReports(kinds = []) {
+  const json = await invoke('get_geo_reports', { kinds })
   return JSON.parse(json)
 }

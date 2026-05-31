@@ -5,7 +5,7 @@ timeout_ms = 3500
 parallelism = 16
 
 [client]
-location_label = "mobile"
+network_label = "mobile"
 app_channel = "app"
 
 [reporting]

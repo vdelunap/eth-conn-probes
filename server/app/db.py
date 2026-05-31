@@ -8,11 +8,7 @@ _pool: Optional[asyncpg.Pool] = None
 
 
 def _connection_params() -> dict:
-    """Return asyncpg connection kwargs.
-
-    Reads the 'main' service from PGSERVICEFILE when available (Docker deployment).
-    Falls back to DATABASE_URL for local development.
-    """
+    """Connection kwargs from the 'main' PGSERVICEFILE entry, or DATABASE_URL locally."""
     pgservicefile = os.environ.get("PGSERVICEFILE")
     if pgservicefile and os.path.exists(pgservicefile):
         cfg = configparser.ConfigParser()
@@ -51,5 +47,5 @@ async def close_pool() -> None:
 
 def get_pool() -> asyncpg.Pool:
     if _pool is None:
-        raise RuntimeError("DB pool not initialised — lifespan not running?")
+        raise RuntimeError("DB pool not initialised; lifespan not running?")
     return _pool

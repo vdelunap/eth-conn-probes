@@ -1,5 +1,4 @@
-// Minimal RLP encoder — covers only what DiscV4 and RLPx probes need.
-// No external dependencies.
+// Just enough RLP encoding for the DiscV4 and RLPx probes.
 
 pub fn rlp_bytes(data: &[u8]) -> Vec<u8> {
     if data.len() == 1 && data[0] < 0x80 {
